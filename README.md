@@ -16,3 +16,7 @@ Our robot is an XY plotter built with 3D-printed parts and a microcontroller. It
 If people start using our robot, making beautiful Rangoli’s and enjoying this art form, can become a daily habit, instead of a rare almost dying festive task. And families can keep the tradition alive at a reasonable cost.
 Why This Project Is Important
 This project is about reviving an almost fizzling part of Indian culture. It uses technology to fix the "intricate, complex artistic hard work", so that people enjoy the beautiful art in their homes daily and stay engaged with their culture. By making art easier, we ensure that Rangoli remains a vibrant part of our homes for generations to come.
+
+
+**Meet our team**
+
