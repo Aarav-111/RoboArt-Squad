@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RangoliVibe • Sacred Designs</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@400;500;600&display=swap');
+
+        :root { --saffron: #FF9933; --gold: #FFD700; }
+
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        .heading-font { font-family: 'Playfair Display', serif; }
+
+        .rangoli-bg { background: linear-gradient(135deg, #FF9933 0%, #FF6B6B 50%, #4CAF50 100%); }
+
+        .post-card {
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .post-card:hover {
+            transform: translateY(-6px);
+            box-shadow: 0 25px 50px -12px rgb(255 153 51 / 0.2);
+        }
+
+        .modal { animation: modalPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        @keyframes modalPop {
+            0% { transform: scale(0.75); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .rangoli-pattern {
+            background-image:
+                radial-gradient(circle at 20% 20%, rgba(255, 215, 0, 0.12) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(255, 153, 51, 0.12) 0%, transparent 50%);
+        }
+
+        /* --- DROPDOWN MENU --- */
+        .post-menu { display: none; position: absolute; top: 100%; right: 0; z-index: 50; }
+        .post-menu.open { display: block; }
+
+        /* --- COMMENT SECTION --- */
+        .comment-section { max-height: 0; overflow: hidden; transition: max-height 0.35s ease; }
+        .comment-section.open { max-height: 800px; }
+
+        /* --- LIKE ANIMATION --- */
+        @keyframes heartPop {
+            0% { transform: scale(1); }
+            40% { transform: scale(1.5); }
+            70% { transform: scale(0.9); }
+            100% { transform: scale(1); }
+        }
+        .heart-pop { animation: heartPop 0.4s ease forwards; }
+
+        /* --- TOAST --- */
+        #toast { transition: opacity 0.3s; }
+
+        /* --- EDIT TEXTAREA --- */
+        .caption-area { resize: none; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #18181b; }
+        ::-webkit-scrollbar-thumb { background: #FF9933; border-radius: 3px; }
+    </style>
+</head>
+<body class="bg-zinc-950 text-white rangoli-pattern min-h-screen">
+
+<!-- ═══════════════════════════════════════════
+     NAVBAR
+═══════════════════════════════════════════ -->
+<nav class="bg-black/80 backdrop-blur-lg border-b border-orange-500/30 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-gradient-to-br from-orange-400 to-yellow-400 rounded-2xl flex items-center justify-center text-2xl shadow-lg">🪔</div>
+            <span class="heading-font text-3xl font-bold tracking-tighter text-orange-400">RangoliVibe</span>
+        </div>
+
+        <div class="flex items-center gap-8">
+            <div onclick="navigateTo('feed')" class="cursor-pointer flex items-center gap-2 hover:text-orange-400 transition-colors nav-link" data-page="feed">
+                <i class="fas fa-home"></i><span class="hidden md:inline">Home</span>
+            </div>
+            <div onclick="navigateTo('explore')" class="cursor-pointer flex items-center gap-2 hover:text-orange-400 transition-colors nav-link" data-page="explore">
+                <i class="fas fa-compass"></i><span class="hidden md:inline">Explore</span>
+            </div>
+            <div onclick="navigateTo('profile')" class="cursor-pointer flex items-center gap-2 hover:text-orange-400 transition-colors nav-link" data-page="profile">
+                <i class="fas fa-user"></i><span class="hidden md:inline">Profile</span>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-4">
+            <button onclick="showPostModal()"
+                    class="bg-orange-500 hover:bg-orange-600 px-6 py-2.5 rounded-2xl font-semibold flex items-center gap-2 transition-all active:scale-95">
+                <i class="fas fa-plus"></i><span class="hidden sm:inline">New Rangoli</span>
+            </button>
+            <div onclick="toggleProfileMenu()" class="w-9 h-9 bg-zinc-800 rounded-2xl overflow-hidden cursor-pointer border-2 border-orange-400 flex items-center justify-center">👤</div>
+        </div>
+    </div>
+</nav>
+
+<!-- ═══════════════════════════════════════════
+     PAGES CONTAINER
+═══════════════════════════════════════════ -->
+<div class="max-w-7xl mx-auto px-6 pt-8 pb-24">
+
+    <!-- ─── FEED PAGE ─── -->
+    <div id="feed-page" class="page">
+        <div class="flex justify-between items-end mb-10">
+            <div>
+                <h1 class="heading-font text-5xl lg:text-6xl font-bold tracking-tighter">
+                    Namaste, <span id="greeting-name" class="text-orange-400">Artisan</span> ✨
+                </h1>
+                <p class="text-zinc-400 mt-2 text-lg">Share your divine Rangoli creations with the world</p>
+            </div>
+            <div class="text-right hidden md:block">
+                <div class="text-sm text-zinc-500 mb-2">Trending</div>
+                <div class="flex gap-2">
+                    <span class="px-3 py-1 bg-zinc-900 rounded-3xl text-xs border border-orange-400/30">#DiwaliSpecial</span>
+                    <span class="px-3 py-1 bg-zinc-900 rounded-3xl text-xs border border-orange-400/30">#PeacockMagic</span>
+                </div>
+            </div>
+        </div>
+        <div id="feed" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"></div>
+    </div>
+
+    <!-- ─── EXPLORE PAGE ─── -->
+    <div id="explore-page" class="page hidden">
+        <h2 class="heading-font text-5xl font-bold mb-8">Discover Divine Patterns</h2>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-6" id="explore-grid"></div>
+    </div>
+
+    <!-- ─── PROFILE PAGE ─── -->
+    <div id="profile-page" class="page hidden">
+        <div class="flex flex-col md:flex-row gap-12">
+            <div class="md:w-80">
+                <div class="bg-zinc-900 rounded-3xl p-8 text-center">
+                    <div class="w-32 h-32 mx-auto bg-zinc-800 rounded-3xl text-7xl flex items-center justify-center mb-6 border-4 border-orange-400">🪔</div>
+                    <h2 id="profile-username" class="text-3xl font-bold"></h2>
+                    <p id="profile-bio" class="text-zinc-400 mt-2"></p>
+                    <div class="grid grid-cols-3 gap-4 mt-10 text-center">
+                        <div><div class="text-3xl font-bold text-orange-400" id="post-count">0</div><div class="text-xs text-zinc-500">Rangolis</div></div>
+                        <div><div class="text-3xl font-bold text-orange-400">1.2K</div><div class="text-xs text-zinc-500">Followers</div></div>
+                        <div><div class="text-3xl font-bold text-orange-400">456</div><div class="text-xs text-zinc-500">Following</div></div>
+                    </div>
+                </div>
+            </div>
+            <div class="flex-1">
+                <h3 class="text-2xl font-semibold mb-6 flex items-center gap-3">
+                    <span>My Creations</span>
+                    <div class="flex-1 h-px bg-gradient-to-r from-orange-400/30 to-transparent"></div>
+                </h3>
+                <div id="profile-posts" class="grid grid-cols-2 gap-6"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     POST MODAL (Create / Edit)
+═══════════════════════════════════════════ -->
+<div id="post-modal" class="hidden fixed inset-0 bg-black/90 backdrop-blur-xl z-[100] flex items-center justify-center">
+    <div class="modal bg-zinc-900 w-full max-w-lg mx-4 rounded-3xl overflow-hidden">
+        <div class="px-8 py-6 border-b border-zinc-700 flex justify-between items-center">
+            <h3 id="post-modal-title" class="text-2xl font-semibold">Create New Rangoli Post</h3>
+            <button onclick="hidePostModal()" class="text-3xl leading-none text-zinc-400 hover:text-white">×</button>
+        </div>
+        <div class="p-8">
+            <!-- Image Preview -->
+            <div id="image-preview" class="hidden border-2 border-dashed border-orange-400/50 rounded-2xl aspect-video bg-zinc-950 flex items-center justify-center mb-6 overflow-hidden">
+                <img id="preview-img" class="max-h-[300px] object-contain w-full">
+            </div>
+
+            <!-- Upload Area (hidden during edit) -->
+            <label id="upload-label" class="block cursor-pointer">
+                <div class="border-2 border-dashed border-zinc-700 hover:border-orange-400 transition-colors rounded-2xl p-10 text-center">
+                    <i class="fas fa-cloud-upload-alt text-5xl text-orange-400 mb-4"></i>
+                    <p class="font-medium">Click to upload your Rangoli photo</p>
+                    <p class="text-xs text-zinc-500 mt-1">PNG, JPG up to 10MB</p>
+                </div>
+                <input type="file" id="image-upload" accept="image/*" class="hidden" onchange="previewImage(event)">
+            </label>
+
+            <!-- Caption -->
+            <textarea id="post-caption" rows="3"
+                      placeholder="Describe your divine design... 🌺"
+                      class="caption-area mt-6 w-full bg-zinc-800 border border-zinc-700 focus:border-orange-400 rounded-2xl px-6 py-4 text-base outline-none"></textarea>
+
+            <div class="flex gap-3 mt-8">
+                <button onclick="hidePostModal()"
+                        class="flex-1 py-4 rounded-2xl border border-zinc-700 hover:bg-zinc-800 transition-colors">Cancel</button>
+                <button id="post-submit-btn" onclick="submitPost()"
+                        class="flex-1 py-4 bg-gradient-to-r from-orange-500 to-yellow-500 rounded-2xl font-bold text-black transition-all active:scale-95">
+                    Share with the Sangam
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     AUTH MODAL
+═══════════════════════════════════════════ -->
+<div id="auth-modal" class="hidden fixed inset-0 bg-black/90 backdrop-blur-xl z-[200] flex items-center justify-center">
+    <div class="modal bg-zinc-900 w-full max-w-md mx-4 rounded-3xl p-10">
+        <div class="text-center mb-8">
+            <div class="mx-auto w-16 h-16 bg-gradient-to-br from-orange-400 to-amber-400 rounded-2xl flex items-center justify-center text-4xl mb-4">🪔</div>
+            <h2 id="auth-title" class="heading-font text-4xl font-bold">Welcome back</h2>
+        </div>
+        <div class="space-y-5">
+            <input id="auth-username" type="text" placeholder="Username"
+                   class="w-full bg-zinc-800 border border-zinc-700 focus:border-orange-400 rounded-2xl px-6 py-4 outline-none">
+            <input id="auth-password" type="password" placeholder="Password"
+                   class="w-full bg-zinc-800 border border-zinc-700 focus:border-orange-400 rounded-2xl px-6 py-4 outline-none">
+            <button onclick="handleAuth()" id="auth-btn"
+                    class="w-full py-4 bg-orange-500 hover:bg-orange-600 rounded-2xl font-bold text-xl transition-all">Login</button>
+            <div class="text-center text-sm">
+                <span id="auth-switch-text" class="text-zinc-400">Don't have an account? </span>
+                <span onclick="toggleAuthMode()" class="text-orange-400 cursor-pointer hover:underline">Sign up</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     CONFIRM DELETE MODAL
+═══════════════════════════════════════════ -->
+<div id="delete-modal" class="hidden fixed inset-0 bg-black/90 backdrop-blur-xl z-[300] flex items-center justify-center">
+    <div class="modal bg-zinc-900 w-full max-w-sm mx-4 rounded-3xl p-8 text-center">
+        <div class="text-6xl mb-4">🗑️</div>
+        <h3 class="text-2xl font-bold mb-2">Delete this Rangoli?</h3>
+        <p class="text-zinc-400 mb-8 text-sm">This cannot be undone. Your creation will be gone forever.</p>
+        <div class="flex gap-4">
+            <button onclick="hideDeleteModal()" class="flex-1 py-3 rounded-2xl border border-zinc-700 hover:bg-zinc-800 transition-colors">Cancel</button>
+            <button onclick="confirmDelete()" class="flex-1 py-3 bg-red-500 hover:bg-red-600 rounded-2xl font-bold transition-colors">Yes, Delete</button>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     IMAGE LIGHTBOX
+═══════════════════════════════════════════ -->
+<div id="lightbox" class="hidden fixed inset-0 bg-black/95 z-[300] flex items-center justify-center p-6" onclick="hideLightbox(event)">
+    <div class="relative max-w-4xl w-full" onclick="event.stopPropagation()">
+        <button onclick="hideLightbox()" class="absolute -top-4 -right-4 bg-zinc-900 border border-zinc-700 text-white w-10 h-10 rounded-full flex items-center justify-center text-2xl shadow-xl hover:bg-zinc-800">×</button>
+        <img id="lightbox-img" src="" class="rounded-3xl shadow-2xl w-full max-h-[85vh] object-contain">
+        <button id="lightbox-download" onclick="downloadImage()" class="mt-4 mx-auto flex items-center gap-2 bg-orange-500 hover:bg-orange-600 px-6 py-3 rounded-2xl font-semibold transition-all">
+            <i class="fas fa-download"></i> Download Image
+        </button>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     TOAST
+═══════════════════════════════════════════ -->
+<div id="toast" class="hidden fixed bottom-6 right-6 bg-zinc-900 border border-orange-400 text-orange-400 px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 z-[999]">
+    <i id="toast-icon" class="fas fa-check-circle"></i>
+    <span id="toast-text"></span>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     JAVASCRIPT
+═══════════════════════════════════════════ -->
+<script>
+/* ────────────────────────────────────────────
+   DATA STORE
+──────────────────────────────────────────── */
+let currentUser = null;
+let isLoginMode = true;
+let editingPostId = null;
+let deletingPostId = null;
+let lightboxSrc = '';
+
+let posts = JSON.parse(localStorage.getItem('rangoliPosts')) || [
+    {
+        id: 1, username: "arti_ka_rangoli", avatar: "🌺",
+        image: "https://picsum.photos/id/1015/800/600",
+        caption: "Lotus Bloom for Ganesh Chaturthi 🪷 Took me 4 hours but the vibes are immaculate",
+        likes: 342, likedBy: [], comments: [], time: "2h"
+    },
+    {
+        id: 2, username: "kolam_queen", avatar: "🦚",
+        image: "https://picsum.photos/id/237/800/600",
+        caption: "Peacock symmetry achieved 🙏 Who else is obsessed with geometric rangolis?",
+        likes: 189, likedBy: [], comments: [], time: "5h"
+    },
+    {
+        id: 3, username: "rangoli_rishi", avatar: "🐘",
+        image: "https://picsum.photos/id/201/800/600",
+        caption: "Elephant procession rangoli for the festival season 🐘",
+        likes: 421, likedBy: [], comments: [], time: "1d"
+    }
+];
+
+let users = JSON.parse(localStorage.getItem('rangoliUsers')) || {};
+
+/* ────────────────────────────────────────────
+   PERSISTENCE
+──────────────────────────────────────────── */
+function saveData() {
+    localStorage.setItem('rangoliPosts', JSON.stringify(posts));
+    localStorage.setItem('rangoliUsers', JSON.stringify(users));
+}
+
+/* ────────────────────────────────────────────
+   TOAST
+──────────────────────────────────────────── */
+let toastTimer;
+function showToast(message, type = 'success') {
+    clearTimeout(toastTimer);
+    const toast = document.getElementById('toast');
+    const icon  = document.getElementById('toast-icon');
+    document.getElementById('toast-text').textContent = message;
+
+    icon.className = type === 'error'
+        ? 'fas fa-exclamation-circle text-red-400'
+        : type === 'info'
+        ? 'fas fa-info-circle text-blue-400'
+        : 'fas fa-check-circle text-orange-400';
+
+    toast.classList.remove('hidden');
+    toastTimer = setTimeout(() => toast.classList.add('hidden'), 2800);
+}
+
+/* ────────────────────────────────────────────
+   AUTH
+──────────────────────────────────────────── */
+function toggleAuthMode() {
+    isLoginMode = !isLoginMode;
+    document.getElementById('auth-title').textContent   = isLoginMode ? "Welcome back" : "Join the Sangam";
+    document.getElementById('auth-btn').textContent     = isLoginMode ? "Login" : "Create Account";
+    document.getElementById('auth-switch-text').textContent = isLoginMode ? "Don't have an account? " : "Already have an account? ";
+}
+
+function handleAuth() {
+    const username = document.getElementById('auth-username').value.trim();
+    const password = document.getElementById('auth-password').value.trim();
+    if (!username || !password) { showToast("Enter both username and password, yaar!", 'error'); return; }
+
+    if (isLoginMode) {
+        if (users[username] && users[username].password === password) {
+            loginUser(username);
+        } else {
+            showToast("Wrong credentials. Try again or create account.", 'error');
+        }
+    } else {
+        if (users[username]) {
+            showToast("Username already taken. Be more creative.", 'error');
+        } else {
+            users[username] = { password, bio: "New Rangoli lover 🌸", avatar: "🪔" };
+            saveData();
+            loginUser(username);
+            showToast("Account created! Welcome to RangoliVibe ✨");
+        }
+    }
+}
+
+function loginUser(username) {
+    currentUser = username;
+    localStorage.setItem('currentUser', username);
+    hideAuthModal();
+    initApp();
+    showToast(`Namaste, ${username}! 🙏`);
+}
+
+function showAuthModal() { document.getElementById('auth-modal').classList.remove('hidden'); }
+function hideAuthModal() { document.getElementById('auth-modal').classList.add('hidden'); }
+
+/* ────────────────────────────────────────────
+   APP INIT
+──────────────────────────────────────────── */
+function initApp() {
+    currentUser = localStorage.getItem('currentUser');
+    if (!currentUser) { showAuthModal(); return; }
+    document.getElementById('greeting-name').textContent = currentUser;
+    renderFeed();
+    renderProfile();
+}
+
+/* ────────────────────────────────────────────
+   NAVIGATION
+──────────────────────────────────────────── */
+function navigateTo(page) {
+    document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
+    document.getElementById(page + '-page').classList.remove('hidden');
+    document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('text-orange-400'));
+    const active = document.querySelector(`.nav-link[data-page="${page}"]`);
+    if (active) active.classList.add('text-orange-400');
+    if (page === 'feed')    renderFeed();
+    if (page === 'profile') renderProfile();
+    if (page === 'explore') renderExplore();
+}
+
+/* ────────────────────────────────────────────
+   FEED RENDER
+──────────────────────────────────────────── */
+function renderFeed() {
+    const feed = document.getElementById('feed');
+    feed.innerHTML = '';
+    if (!posts.length) {
+        feed.innerHTML = '<p class="text-zinc-500 col-span-3 text-center py-16 text-lg">No posts yet. Be the first to share! 🌺</p>';
+        return;
+    }
+    posts.forEach(post => feed.innerHTML += buildPostCard(post));
+}
+
+function buildPostCard(post) {
+    const isOwner  = currentUser === post.username;
+    const liked    = (post.likedBy || []).includes(currentUser);
+    const likeColor = liked ? 'text-red-500' : 'text-zinc-400';
+    const comments  = post.comments || [];
+
+    const ownerActions = isOwner ? `
+        <button onclick="openEditPost(${post.id})"
+                class="flex items-center gap-2 w-full px-4 py-2 hover:bg-zinc-700 rounded-xl text-sm text-left transition-colors">
+            <i class="fas fa-pen text-orange-400 w-4"></i> Edit Caption
+        </button>
+        <button onclick="openDeleteModal(${post.id})"
+                class="flex items-center gap-2 w-full px-4 py-2 hover:bg-zinc-700 rounded-xl text-sm text-left text-red-400 transition-colors">
+            <i class="fas fa-trash w-4"></i> Delete Post
+        </button>
+    ` : '';
+
+    const commentItems = comments.slice(-3).map(c => `
+        <div class="flex gap-2 items-start text-sm">
+            <span class="font-semibold text-orange-300">${c.user}</span>
+            <span class="text-zinc-300">${escapeHTML(c.text)}</span>
+        </div>
+    `).join('');
+
+    const moreCount = comments.length > 3 ? `<p class="text-xs text-zinc-500 mb-1">+${comments.length - 3} more comments</p>` : '';
+
+    return `
+    <div class="post-card bg-zinc-900 rounded-3xl overflow-hidden border border-zinc-800" id="post-${post.id}">
+
+        <!-- POST HEADER -->
+        <div class="p-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-zinc-700 rounded-2xl flex items-center justify-center text-xl">${post.avatar}</div>
+                <div>
+                    <div class="font-semibold">${post.username}</div>
+                    <div class="text-xs text-zinc-500">${post.time}</div>
+                </div>
+            </div>
+
+            <!-- THREE-DOT MENU -->
+            <div class="relative" id="menu-wrap-${post.id}">
+                <button onclick="togglePostMenu(${post.id})"
+                        class="w-8 h-8 rounded-full hover:bg-zinc-700 flex items-center justify-center transition-colors">
+                    <i class="fas fa-ellipsis-h text-zinc-400"></i>
+                </button>
+                <div id="post-menu-${post.id}" class="post-menu bg-zinc-800 border border-zinc-700 rounded-2xl p-2 shadow-2xl min-w-[170px]">
+                    <button onclick="openLightbox('${post.image}')"
+                            class="flex items-center gap-2 w-full px-4 py-2 hover:bg-zinc-700 rounded-xl text-sm text-left transition-colors">
+                        <i class="fas fa-expand text-orange-400 w-4"></i> View Full Image
+                    </button>
+                    <button onclick="triggerDownload('${post.image}', ${post.id})"
+                            class="flex items-center gap-2 w-full px-4 py-2 hover:bg-zinc-700 rounded-xl text-sm text-left transition-colors">
+                        <i class="fas fa-download text-orange-400 w-4"></i> Download Image
+                    </button>
+                    ${ownerActions}
+                </div>
+            </div>
+        </div>
+
+        <!-- POST IMAGE -->
+        <img src="${post.image}" loading="lazy"
+             class="w-full aspect-video object-cover cursor-pointer"
+             onclick="openLightbox('${post.image}')">
+
+        <!-- ACTIONS BAR -->
+        <div class="px-6 pt-4 flex items-center justify-between">
+            <div class="flex gap-5 text-xl">
+                <!-- Like -->
+                <button onclick="toggleLike(${post.id}, this)"
+                        class="flex items-center gap-1.5 ${likeColor} hover:text-red-500 cursor-pointer transition-colors group"
+                        data-liked="${liked}">
+                    <i class="fas fa-heart"></i>
+                    <span class="text-sm font-semibold">${post.likes}</span>
+                </button>
+
+                <!-- Comment -->
+                <button onclick="toggleComments(${post.id})"
+                        class="flex items-center gap-1.5 text-zinc-400 hover:text-orange-400 cursor-pointer transition-colors">
+                    <i class="fas fa-comment-dots"></i>
+                    <span class="text-sm font-semibold">${comments.length}</span>
+                </button>
+            </div>
+
+            <button onclick="triggerDownload('${post.image}', ${post.id})"
+                    class="text-zinc-500 hover:text-orange-400 transition-colors text-sm flex items-center gap-1.5">
+                <i class="fas fa-download"></i>
+            </button>
+        </div>
+
+        <!-- CAPTION -->
+        <div class="px-6 pt-2 pb-2">
+            <p class="text-zinc-300 leading-relaxed text-sm">
+                <span class="font-semibold text-white">${post.username}</span> ${escapeHTML(post.caption)}
+            </p>
+        </div>
+
+        <!-- COMMENTS SECTION -->
+        <div class="comment-section" id="comments-${post.id}">
+            <div class="px-6 pb-2">
+                ${moreCount}
+                <div class="space-y-2 mb-3" id="comment-list-${post.id}">${commentItems}</div>
+
+                <!-- Add Comment -->
+                <div class="flex gap-2 mt-3">
+                    <input type="text" id="comment-input-${post.id}"
+                           placeholder="Add a comment… 🌸"
+                           class="flex-1 bg-zinc-800 border border-zinc-700 focus:border-orange-400 rounded-xl px-4 py-2 text-sm outline-none"
+                           onkeydown="if(event.key==='Enter') submitComment(${post.id})">
+                    <button onclick="submitComment(${post.id})"
+                            class="bg-orange-500 hover:bg-orange-600 px-4 py-2 rounded-xl text-sm font-semibold transition-colors">Post</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="pb-2"></div>
+    </div>`;
+}
+
+/* ────────────────────────────────────────────
+   POST MENU TOGGLE
+──────────────────────────────────────────── */
+function togglePostMenu(id) {
+    const menu = document.getElementById(`post-menu-${id}`);
+    const isOpen = menu.classList.contains('open');
+    // Close all menus
+    document.querySelectorAll('.post-menu').forEach(m => m.classList.remove('open'));
+    if (!isOpen) menu.classList.add('open');
+}
+
+// Close menus on outside click
+document.addEventListener('click', e => {
+    if (!e.target.closest('[id^="menu-wrap-"]')) {
+        document.querySelectorAll('.post-menu').forEach(m => m.classList.remove('open'));
+    }
+});
+
+/* ────────────────────────────────────────────
+   LIKES
+──────────────────────────────────────────── */
+function toggleLike(id, btn) {
+    if (!currentUser) { showAuthModal(); return; }
+    const post = posts.find(p => p.id === id);
+    if (!post) return;
+    post.likedBy = post.likedBy || [];
+    const idx = post.likedBy.indexOf(currentUser);
+    if (idx === -1) {
+        post.likedBy.push(currentUser);
+        post.likes++;
+        btn.classList.remove('text-zinc-400');
+        btn.classList.add('text-red-500');
+        btn.setAttribute('data-liked', 'true');
+        btn.querySelector('i').classList.add('heart-pop');
+        setTimeout(() => btn.querySelector('i').classList.remove('heart-pop'), 500);
+    } else {
+        post.likedBy.splice(idx, 1);
+        post.likes--;
+        btn.classList.remove('text-red-500');
+        btn.classList.add('text-zinc-400');
+        btn.setAttribute('data-liked', 'false');
+    }
+    btn.querySelector('span').textContent = post.likes;
+    saveData();
+}
+
+/* ────────────────────────────────────────────
+   COMMENTS
+──────────────────────────────────────────── */
+function toggleComments(id) {
+    const section = document.getElementById(`comments-${id}`);
+    section.classList.toggle('open');
+    if (section.classList.contains('open')) {
+        const input = document.getElementById(`comment-input-${id}`);
+        if (input) setTimeout(() => input.focus(), 300);
+    }
+}
+
+function submitComment(id) {
+    if (!currentUser) { showAuthModal(); return; }
+    const input = document.getElementById(`comment-input-${id}`);
+    const text  = input.value.trim();
+    if (!text) return;
+
+    const post = posts.find(p => p.id === id);
+    if (!post) return;
+    post.comments = post.comments || [];
+    post.comments.push({ user: currentUser, text, time: 'now' });
+    saveData();
+    input.value = '';
+
+    // Update comment count & list without full re-render
+    const list = document.getElementById(`comment-list-${id}`);
+    const newComment = document.createElement('div');
+    newComment.className = 'flex gap-2 items-start text-sm';
+    newComment.innerHTML = `<span class="font-semibold text-orange-300">${currentUser}</span><span class="text-zinc-300">${escapeHTML(text)}</span>`;
+    list.appendChild(newComment);
+
+    // Update comment count in action bar
+    const commentBtn = document.querySelector(`#post-${id} button[onclick="toggleComments(${id})"] span`);
+    if (commentBtn) commentBtn.textContent = post.comments.length;
+}
+
+/* ────────────────────────────────────────────
+   LIGHTBOX
+──────────────────────────────────────────── */
+function openLightbox(src) {
+    lightboxSrc = src;
+    document.getElementById('lightbox-img').src = src;
+    document.getElementById('lightbox').classList.remove('hidden');
+    document.getElementById('lightbox').querySelector('div').classList.add('modal');
+}
+
+function hideLightbox(e) {
+    if (!e || e.target === document.getElementById('lightbox')) {
+        document.getElementById('lightbox').classList.add('hidden');
+        document.getElementById('lightbox-img').src = '';
+    }
+}
+
+async function downloadImage() {
+    await triggerDownload(lightboxSrc, null);
+}
+
+async function triggerDownload(src, postId) {
+    togglePostMenu(postId); // close menu
+    try {
+        const resp = await fetch(src);
+        const blob = await resp.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = `rangoli-${Date.now()}.jpg`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast("Image downloaded! 🎨");
+    } catch {
+        // fallback: open in new tab
+        window.open(src, '_blank');
+        showToast("Opened in new tab — right-click to save 🌐", 'info');
+    }
+}
+
+/* ────────────────────────────────────────────
+   POST MODAL (Create & Edit)
+──────────────────────────────────────────── */
+function showPostModal() {
+    if (!currentUser) { showAuthModal(); return; }
+    editingPostId = null;
+    document.getElementById('post-modal-title').textContent   = "Create New Rangoli Post";
+    document.getElementById('post-submit-btn').textContent    = "Share with the Sangam";
+    document.getElementById('upload-label').style.display     = 'block';
+    document.getElementById('image-preview').classList.add('hidden');
+    document.getElementById('post-caption').value             = '';
+    document.getElementById('post-modal').classList.remove('hidden');
+}
+
+function openEditPost(id) {
+    if (!currentUser) return;
+    const post = posts.find(p => p.id === id);
+    if (!post || post.username !== currentUser) return;
+
+    editingPostId = id;
+    document.getElementById('post-modal-title').textContent   = "Edit Rangoli Post";
+    document.getElementById('post-submit-btn').textContent    = "Save Changes";
+    document.getElementById('upload-label').style.display     = 'none';
+    document.getElementById('preview-img').src                = post.image;
+    document.getElementById('image-preview').classList.remove('hidden');
+    document.getElementById('post-caption').value             = post.caption;
+    document.getElementById('post-modal').classList.remove('hidden');
+    togglePostMenu(id);
+}
+
+function hidePostModal() {
+    document.getElementById('post-modal').classList.add('hidden');
+    editingPostId = null;
+}
+
+function previewImage(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+        document.getElementById('preview-img').src = ev.target.result;
+        document.getElementById('image-preview').classList.remove('hidden');
+    };
+    reader.readAsDataURL(file);
+}
+
+function submitPost() {
+    const caption = document.getElementById('post-caption').value.trim() || "Beautiful Rangoli by a true artist ✨";
+
+    // ─── EDIT MODE ───
+    if (editingPostId !== null) {
+        const post = posts.find(p => p.id === editingPostId);
+        if (post) {
+            post.caption = caption;
+            saveData();
+            hidePostModal();
+            renderFeed();
+            renderProfile();
+            showToast("Post updated! ✨");
+        }
+        return;
+    }
+
+    // ─── CREATE MODE ───
+    const previewImg = document.getElementById('preview-img').src;
+    if (!previewImg || previewImg === window.location.href) {
+        showToast("Upload a Rangoli image first!", 'error'); return;
+    }
+
+    const newPost = {
+        id: Date.now(),
+        username: currentUser,
+        avatar: "🌟",
+        image: previewImg,
+        caption,
+        likes: 0,
+        likedBy: [],
+        comments: [],
+        time: "just now"
+    };
+    posts.unshift(newPost);
+    saveData();
+    hidePostModal();
+    renderFeed();
+    renderProfile();
+    showToast("Rangoli shared with the universe! 🌌");
+}
+
+/* ────────────────────────────────────────────
+   DELETE
+──────────────────────────────────────────── */
+function openDeleteModal(id) {
+    deletingPostId = id;
+    document.getElementById('delete-modal').classList.remove('hidden');
+    togglePostMenu(id);
+}
+
+function hideDeleteModal() {
+    document.getElementById('delete-modal').classList.add('hidden');
+    deletingPostId = null;
+}
+
+function confirmDelete() {
+    if (deletingPostId === null) return;
+    posts = posts.filter(p => p.id !== deletingPostId);
+    saveData();
+    hideDeleteModal();
+    renderFeed();
+    renderProfile();
+    showToast("Post deleted. 🗑️", 'info');
+}
+
+/* ────────────────────────────────────────────
+   EXPLORE
+──────────────────────────────────────────── */
+function renderExplore() {
+    const grid = document.getElementById('explore-grid');
+    grid.innerHTML = posts.map(post => `
+        <div class="rounded-2xl overflow-hidden cursor-pointer hover:ring-2 hover:ring-orange-400 transition-all"
+             onclick="openLightbox('${post.image}')">
+            <img src="${post.image}" loading="lazy" class="w-full aspect-square object-cover">
+        </div>
+    `).join('');
+}
+
+/* ────────────────────────────────────────────
+   PROFILE
+──────────────────────────────────────────── */
+function renderProfile() {
+    if (!currentUser) return;
+    document.getElementById('profile-username').textContent = currentUser;
+    document.getElementById('profile-bio').textContent     = users[currentUser]?.bio || "Lover of colors and symmetry";
+    const myPosts = posts.filter(p => p.username === currentUser);
+    document.getElementById('post-count').textContent      = myPosts.length;
+
+    const grid = document.getElementById('profile-posts');
+    grid.innerHTML = myPosts.map(post => `
+        <div class="bg-zinc-900 rounded-3xl overflow-hidden border border-zinc-800 group">
+            <div class="relative overflow-hidden">
+                <img src="${post.image}" loading="lazy" class="w-full aspect-square object-cover group-hover:scale-105 transition-transform duration-500 cursor-pointer"
+                     onclick="openLightbox('${post.image}')">
+                <div class="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onclick="openEditPost(${post.id})"
+                            class="w-8 h-8 bg-black/60 rounded-full flex items-center justify-center hover:bg-orange-500 transition-colors">
+                        <i class="fas fa-pen text-xs"></i>
+                    </button>
+                    <button onclick="openDeleteModal(${post.id})"
+                            class="w-8 h-8 bg-black/60 rounded-full flex items-center justify-center hover:bg-red-500 transition-colors">
+                        <i class="fas fa-trash text-xs"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="p-4 text-sm text-zinc-300 line-clamp-2">${escapeHTML(post.caption)}</div>
+            <div class="px-4 pb-4 text-xs text-zinc-500 flex items-center gap-3">
+                <span><i class="fas fa-heart text-red-500 mr-1"></i>${post.likes}</span>
+                <span><i class="fas fa-comment-dots text-orange-400 mr-1"></i>${(post.comments||[]).length}</span>
+            </div>
+        </div>
+    `).join('') || '<p class="text-zinc-500 col-span-2 text-center py-12">No creations yet. Time to make magic! 🌺</p>';
+}
+
+/* ────────────────────────────────────────────
+   PROFILE / LOGOUT TOGGLE
+──────────────────────────────────────────── */
+function toggleProfileMenu() {
+    if (!currentUser) { showAuthModal(); return; }
+    if (confirm(`Logout as ${currentUser}?`)) {
+        localStorage.removeItem('currentUser');
+        currentUser = null;
+        showAuthModal();
+    }
+}
+
+/* ────────────────────────────────────────────
+   UTILS
+──────────────────────────────────────────── */
+function escapeHTML(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+/* ────────────────────────────────────────────
+   KEYBOARD SHORTCUTS
+──────────────────────────────────────────── */
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+        ['post-modal','auth-modal','delete-modal','lightbox'].forEach(id => {
+            document.getElementById(id).classList.add('hidden');
+        });
+        document.querySelectorAll('.post-menu').forEach(m => m.classList.remove('open'));
+    }
+});
+
+/* ────────────────────────────────────────────
+   BOOT
+──────────────────────────────────────────── */
+window.onload = () => {
+    saveData();
+    initApp();
+    navigateTo('feed');
+};
+</script>
+</body>
+</html>
