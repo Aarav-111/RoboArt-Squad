@@ -43,11 +43,11 @@ CANVAS_BG    = "#f4f4ff"
 
 # Mode definitions: (label, emoji, accent_color)
 MODES = [
-    ("Pre-designed",            "🖼",  ACCENT_BLUE),
-    ("AI Generated",            "✨",  ACCENT_PURP),
-    ("Draw with AI Assistance", "✏️",  ACCENT_CYAN),
-    ("Import Designs",          "☁️",  ACCENT_AMBER),
-    ("Robot Test",              "🤖",  ACCENT_GREEN),
+    ("Pre-designed",            "",  ACCENT_BLUE),
+    ("AI Generated",            "",  ACCENT_PURP),
+    ("Draw with AI Assistance", "",  ACCENT_CYAN),
+    ("Import Designs",          "",  ACCENT_AMBER),
+    ("Robot Test",              "",  ACCENT_GREEN),
 ]
 
 
@@ -73,7 +73,7 @@ class ShapeApp:
         self.selected_shape_index = None
         self.current_type         = tk.StringVar(value="Pre-designed")
         self.shape_type           = tk.StringVar(value="Select")
-        self.feed_rate            = tk.StringVar(value="200")
+        self.feed_rate            = tk.StringVar(value="Medium (default)")
         self.port_var             = tk.StringVar()
         self.size_val             = tk.IntVar(value=50)
         self.is_moving            = False
@@ -81,6 +81,7 @@ class ShapeApp:
         self.is_sending           = False
         self.hint_popup           = None
         self.hint_after_id        = None
+        self.progress_var         = tk.DoubleVar(value=0.0)
 
         self._radio_dots   = {}   # mode_label -> (canvas_widget, dot_color)
         self._radio_canvases = {}
@@ -103,18 +104,17 @@ class ShapeApp:
         self._build_banner(left)
 
         # Sections
-        self._section(left, "🔧  Connection",     ACCENT_AMBER, self._build_connection)
-        self._section(left, "🎨  Design Options",  ACCENT_BLUE,  self._build_design)
-        self._section(left, "💧  Nozzle Status",   ACCENT_CYAN,  self._build_nozzle)
+        self._section(left, "Connection",     ACCENT_AMBER, self._build_connection)
+        self._section(left, "Design Options",  ACCENT_BLUE,  self._build_design)
+        self._section(left, "Print Progress",   ACCENT_CYAN,  self._build_progress)
 
         # Spacer then action buttons at the bottom
         spacer = tk.Frame(left, bg=BG_DARK)
         spacer.pack(fill="both", expand=True)
 
-        self._action_btn(left, "✦   Clear Canvas",    self.clear_canvas,         "#7c3aed")
-        self._action_btn(left, "</>  Import designs",  self.import_design,        "#d97706")
+        self._action_btn(left, "Clear Canvas",    self.clear_canvas,         "#7c3aed")
         self.send_btn = self._action_btn(
-            left, "➤   Send to GRBL", self.start_gcode_streaming, "#0d9488")
+            left, "Send to Rangoli maker", self.start_gcode_streaming, "#0d9488")
 
         # ── Right pane ────────────────────────────────────────────────────────
         right = tk.Frame(main, bg=BG_DARK)
@@ -127,9 +127,9 @@ class ShapeApp:
 
         hdr = tk.Frame(con_wrap, bg=BG_PANEL)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="▸  REAL-TIME GRBL CONSOLE", bg=BG_PANEL, fg=ACCENT_PURP,
+        tk.Label(hdr, text="REAL-TIME GRBL CONSOLE", bg=BG_PANEL, fg=ACCENT_PURP,
                  font=("Segoe UI", 10, "bold")).pack(side="left", padx=10, pady=6)
-        tk.Button(hdr, text="✕ Clear", bg=BG_PANEL, fg=TEXT_DIM, bd=0,
+        tk.Button(hdr, text="Clear", bg=BG_PANEL, fg=TEXT_DIM, bd=0,
                   font=("Segoe UI", 9), activebackground=BG_PANEL,
                   command=lambda: self.console.delete("1.0", tk.END)).pack(side="right", padx=10)
 
@@ -148,9 +148,21 @@ class ShapeApp:
                                     font=("Consolas", 10, "bold"))
         self.coord_label.pack(side="bottom", anchor="w", padx=16, pady=(0, 2))
 
+        # ── Progress bar above the console ───────────────────────────────────
+        prog_wrap = tk.Frame(right, bg=BG_DARK)
+        prog_wrap.pack(side="bottom", fill="x", padx=16, pady=(0, 4))
+        self.progress_bar = ctk.CTkProgressBar(
+            prog_wrap, variable=self.progress_var,
+            fg_color=BG_INPUT, progress_color=ACCENT_PURP,
+            height=10, corner_radius=5)
+        self.progress_bar.pack(fill="x")
+        self.progress_bar.set(0)
+
         # ── Canvas packed last so it fills remaining space (top area) ─────────
-        canvas_wrap = tk.Frame(right, bg="#c4b5fd", bd=1)
-        canvas_wrap.pack(side="top", anchor="ne", padx=10, pady=10)
+        canvas_outer = tk.Frame(right, bg=BG_DARK)
+        canvas_outer.pack(side="top", fill="both", expand=True)
+        canvas_wrap = tk.Frame(canvas_outer, bg="#c4b5fd", bd=1)
+        canvas_wrap.place(relx=0.5, rely=0.5, anchor="center")
 
         self.canvas = tk.Canvas(canvas_wrap, width=CANVAS_W, height=CANVAS_H,
                                 bg=CANVAS_BG, highlightthickness=0)
@@ -177,18 +189,21 @@ class ShapeApp:
 
         # Rangoli Maker in a warm gradient-looking colour using two overlapping labels
         title_c = tk.Canvas(text_fr, bg=BG_PANEL, highlightthickness=0,
-                            width=230, height=34)
+                            width=250, height=34)
         title_c.pack(anchor="w")
         # Draw each character manually for a colour sweep effect
         title = "Rangoli Maker"
         colors = ["#f9a825", "#f97316", "#ec4899", "#a855f7",
                   "#6366f1", "#3b82f6", "#06b6d4", "#10b981",
                   "#f9a825", "#f97316", "#ec4899", "#a855f7", "#6366f1"]
+        _char_w = {'i': 7, 'l': 8, 'r': 9, 't': 9, 'f': 9, ' ': 11,
+                   'a': 12, 'n': 12, 'g': 12, 'o': 12, 'e': 11, 'k': 11,
+                   'R': 13, 'M': 15}
         x_off = 4
         for ch, col in zip(title, colors):
             title_c.create_text(x_off, 17, text=ch, fill=col,
                                 font=("Georgia", 17, "bold italic"), anchor="w")
-            x_off += 14 if ch == " " else 13
+            x_off += _char_w.get(ch, 13)
 
         tk.Label(text_fr, text="Design Beautiful. Celebrate Tradition.",
                  bg=BG_PANEL, fg=TEXT_DIM, font=("Segoe UI", 7)).pack(anchor="w")
@@ -217,7 +232,7 @@ class ShapeApp:
         inner.pack(fill="both", padx=(3, 1), pady=(0, 1))
 
         tk.Label(inner, text=title, bg=BG_CARD, fg=accent,
-                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=10, pady=(8, 4))
+                 font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=10, pady=(8, 4))
 
         body = tk.Frame(inner, bg=BG_CARD)
         body.pack(fill="x", padx=10, pady=(0, 10))
@@ -252,7 +267,7 @@ class ShapeApp:
     # ── Label helper ──────────────────────────────────────────────────────────
     def _label(self, parent, text, fg=TEXT_DIM):
         tk.Label(parent, text=text, bg=BG_CARD, fg=fg,
-                 font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(6, 1))
+                 font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(6, 1))
 
     def _make_combo(self, parent, var, values, btn_hover=ACCENT_PURP, **kw):
         cb = ctk.CTkComboBox(parent, variable=var, values=values,
@@ -284,7 +299,7 @@ class ShapeApp:
         self.port_menu = self.port_combo   # alias for poll_ports compatibility
 
     def _build_design(self, body, accent):
-        for label, emoji, col in MODES:
+        for label, _, col in MODES:
             row = tk.Frame(body, bg=BG_CARD, pady=2)
             row.pack(fill="x")
 
@@ -296,8 +311,18 @@ class ShapeApp:
                             width=2, tags="dot")
             self._radio_dots[label] = (dot, col)
 
-            tk.Label(row, text=f"{emoji}  {label}", bg=BG_CARD,
-                     fg=TEXT_PRIMARY, font=("Segoe UI", 9, "bold")).pack(side="left")
+            tk.Label(row, text=label, bg=BG_CARD,
+                     fg=TEXT_PRIMARY, font=("Segoe UI", 11, "bold")).pack(side="left")
+
+            # Inline import button for Import Designs row
+            if label == "Import Designs":
+                imp_btn = ctk.CTkButton(
+                    row, text="Browse", command=self.import_design,
+                    fg_color="#d97706", hover_color="#b45309",
+                    text_color="#ffffff",
+                    font=("Segoe UI", 10, "bold"),
+                    height=28, width=90, corner_radius=6)
+                imp_btn.pack(side="right", padx=(4, 0))
 
             # Robot Test dropdown — created BEFORE the binding loop so we can
             # exclude it from the click-to-select-mode bindings
@@ -320,8 +345,9 @@ class ShapeApp:
             row.bind("<Button-1>", lambda e, lbl=label: self._select_mode(lbl))
             dot.bind("<Button-1>",  lambda e, lbl=label: self._select_mode(lbl))
             for child in row.winfo_children():
-                # Skip the shape combobox — its own click handler must stay intact
                 if hasattr(self, 'shape_menu') and child is self.shape_menu:
+                    continue
+                if hasattr(self, '_import_btn') and child is self._import_btn:
                     continue
                 child.bind("<Button-1>", lambda e, lbl=label: self._select_mode(lbl))
 
@@ -345,9 +371,9 @@ class ShapeApp:
         self.size_slider.pack(side="left", fill="x", expand=True, pady=2)
 
         # Speed combobox
-        self._label(body, "Speed (mm/min):", ACCENT_AMBER)
+        self._label(body, "Speed:", ACCENT_AMBER)
         self._combo(body, self.feed_rate,
-                    ["100", "150", "200", "250", "300", "350"])
+                    ["Low", "Medium (default)", "High"])
 
     def _on_shape_menu_select(self, value):
         self.shape_type.set(value)
@@ -372,21 +398,28 @@ class ShapeApp:
         if not silent and label == "Robot Test":
             self.on_shape_type_selected()
 
-    def _build_nozzle(self, body, accent):
-        self.tool_status_box = tk.Label(
-            body, text="Tool: OFF", width=18,
-            font=("Segoe UI", 12, "bold"),
-            bg="#1e1a48", fg=ACCENT_CYAN, pady=8,
-            relief="flat", bd=0)
-        self.tool_status_box.pack(fill="x", pady=4)
+    def _build_progress(self, body, accent):
+        self.sidebar_progress_var = tk.DoubleVar(value=0.0)
+        self.sidebar_progress_bar = ctk.CTkProgressBar(
+            body, variable=self.sidebar_progress_var,
+            fg_color=BG_INPUT, progress_color=ACCENT_CYAN,
+            height=14, corner_radius=6)
+        self.sidebar_progress_bar.pack(fill="x", pady=(6, 2))
+        self.sidebar_progress_bar.set(0)
 
-    # ── Tool / console ────────────────────────────────────────────────────────
-    def update_tool_box(self, status_text):
-        if "ON" in status_text:
-            self.tool_status_box.config(text=status_text, bg="#065f46", fg=ACCENT_GREEN)
-        else:
-            self.tool_status_box.config(text=status_text, bg="#1e1a48", fg=ACCENT_CYAN)
+        # Tick marks row
+        marks_row = tk.Frame(body, bg=BG_CARD)
+        marks_row.pack(fill="x")
+        for pct in (0, 25, 50, 75, 100):
+            tk.Label(marks_row, text=f"{pct}%", bg=BG_CARD, fg=TEXT_DIM,
+                     font=("Consolas", 8)).pack(side="left", expand=True)
 
+        self.sidebar_pct_label = tk.Label(
+            body, text="0%", bg=BG_CARD, fg=ACCENT_CYAN,
+            font=("Segoe UI", 11, "bold"))
+        self.sidebar_pct_label.pack(anchor="center", pady=(4, 2))
+
+    # ── Console ───────────────────────────────────────────────────────────────
     def log_to_console(self, msg, tag="info"):
         self.console.insert(tk.END, msg + "\n", tag)
         self.console.see(tk.END)
@@ -396,8 +429,8 @@ class ShapeApp:
         self.context_menu = tk.Menu(self.root, tearoff=0, bg=BG_CARD, fg=TEXT_PRIMARY,
                                     activebackground=ACCENT_BLUE, activeforeground=BG_DARK,
                                     font=("Segoe UI", 10))
-        self.context_menu.add_command(label="✥  Move",   command=self.start_move)
-        self.context_menu.add_command(label="✕  Delete", command=self.delete_shape)
+        self.context_menu.add_command(label="Move",   command=self.start_move)
+        self.context_menu.add_command(label="Delete", command=self.delete_shape)
 
     # ── Port polling ──────────────────────────────────────────────────────────
     def poll_ports(self):
@@ -507,7 +540,7 @@ class ShapeApp:
         if not path:
             return
 
-        self.log_to_console(f"📂  Loading raw design: {os.path.basename(path)}", "info")
+        self.log_to_console(f"Loading raw design: {os.path.basename(path)}", "info")
 
         try:
             pil_img = Image.open(path).convert("L")
@@ -520,7 +553,7 @@ class ShapeApp:
         rgba     = Image.new("RGBA", pil_img.size, (0, 0, 0, 0))
         rgba.putalpha(alpha)
         tk_img   = ImageTk.PhotoImage(rgba)
-        self.log_to_console("✓  Raw design loaded (black only).", "recv")
+        self.log_to_console("Raw design loaded (black only).", "recv")
 
         try:
             img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
@@ -538,7 +571,7 @@ class ShapeApp:
         binary  = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, close_k)
 
         contours, hierarchy = cv2.findContours(binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
-        self.log_to_console(f"✓  {len(contours)} raw contours found.", "recv")
+        self.log_to_console(f"{len(contours)} raw contours found.", "recv")
 
         def img_to_canvas(iy_px, ix_px):
             cx = MARGIN_L + (ix_px / iw) * GRAPH_W
@@ -575,7 +608,7 @@ class ShapeApp:
 
         total_pts = sum(len(p) for p in canvas_paths)
         self.log_to_console(
-            f"✓  Imported {len(canvas_paths)} stroke paths ({total_pts} points). "
+            f"Imported {len(canvas_paths)} stroke paths ({total_pts} points). "
             f"Ready to generate G-code.", "recv")
 
     # ── Skeleton → ordered paths ──────────────────────────────────────────────
@@ -672,7 +705,7 @@ class ShapeApp:
         glass.pack(fill="both", expand=True)
         self._draw_rounded_rect(glass, 4, 4, w-4, h-4, radius=20,
                                 fill=BG_CARD, outline=ACCENT_CYAN, width=1)
-        glass.create_text(w//2, h//2, text=f"✦  {message}",
+        glass.create_text(w//2, h//2, text=message,
                           fill=ACCENT_CYAN, font=("Segoe UI", 10, "bold"))
         self.hint_popup = popup
         self._fade(popup, 0.0, 0.95, 0.08)
@@ -910,7 +943,8 @@ class ShapeApp:
         self.log_to_console("Canvas cleared.", "info")
 
     def generate_gcode(self):
-        f     = self.feed_rate.get()
+        _SPEED_MAP = {"Low": 150, "Medium (default)": 200, "High": 250}
+        f = _SPEED_MAP.get(self.feed_rate.get(), 200)
         lines = ["$X", "G21", "G90", f"F{f}"]
 
         for s in self.shapes:
@@ -962,7 +996,7 @@ class ShapeApp:
         path_out = os.path.expanduser("~/Downloads/design.gcode")
         with open(path_out, "w") as fh:
             fh.write("\n".join(lines))
-        self.log_to_console(f"G-code saved → {path_out}", "info")
+        self.log_to_console(f"G-code saved -> {path_out}", "info")
         return path_out
 
     # ── GRBL streaming ────────────────────────────────────────────────────────
@@ -976,36 +1010,45 @@ class ShapeApp:
         threading.Thread(target=self.send_gcode, daemon=True).start()
 
     def send_gcode(self):
-        self.log_to_console("⚙  Generating G-code...", "info")
+        self.log_to_console("Generating G-code...", "info")
         path = self.generate_gcode()
-        self.log_to_console(f"✓  G-code ready → {path}", "recv")
-        self.log_to_console("▶  Connecting to GRBL...", "info")
+        self.log_to_console(f"G-code ready -> {path}", "recv")
+        self.log_to_console("Connecting to GRBL...", "info")
+        self.progress_var.set(0.0)
+        self.progress_bar.set(0.0)
         try:
             ser = serial.Serial(self.port_var.get(), 115200, timeout=1)
             time.sleep(2)
             ser.write(b"\r\n\r\n")
             time.sleep(2)
             ser.reset_input_buffer()
-            self.update_tool_box("Tool: OFF")
-
             with open(path, "r") as fh:
-                for line in fh:
-                    clean = line.strip()
-                    if not clean: continue
-                    if clean == "M3": self.update_tool_box("Tool: ON")
-                    elif clean == "M5": self.update_tool_box("Tool: OFF")
-                    self.log_to_console(f"→ {clean}", "send")
-                    ser.write((clean + "\n").encode())
-                    while True:
-                        res = ser.readline().decode().strip()
-                        if res:
-                            self.log_to_console(f"← {res}",
-                                "recv" if "ok" in res.lower() else "err")
-                        if "ok" in res.lower() or "error" in res.lower():
-                            break
+                lines = [l.strip() for l in fh if l.strip()]
+            total = max(len(lines), 1)
+
+            for idx, clean in enumerate(lines):
+                self.log_to_console(f"→ {clean}", "send")
+                ser.write((clean + "\n").encode())
+                while True:
+                    res = ser.readline().decode().strip()
+                    if res:
+                        self.log_to_console(f"← {res}",
+                            "recv" if "ok" in res.lower() else "err")
+                    if "ok" in res.lower() or "error" in res.lower():
+                        break
+                progress = (idx + 1) / total
+                self.progress_var.set(progress)
+                self.root.after(0, lambda p=progress: (
+                    self.progress_bar.set(p),
+                    self.sidebar_progress_bar.set(p),
+                    self.sidebar_pct_label.config(text=f"{int(p * 100)}%"),
+                ))
 
             ser.close()
-            self.log_to_console("✓ Job complete.", "recv")
+            self.progress_bar.set(1.0)
+            self.sidebar_progress_bar.set(1.0)
+            self.root.after(0, lambda: self.sidebar_pct_label.config(text="100%"))
+            self.log_to_console("Job complete.", "recv")
         except Exception as e:
             self.log_to_console(f"Connection Error: {e}", "err")
         finally:
