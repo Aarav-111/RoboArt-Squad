@@ -18,5 +18,18 @@ Why This Project Is Important
 This project is about reviving an almost fizzling part of Indian culture. It uses technology to fix the "intricate, complex artistic hard work", so that people enjoy the beautiful art in their homes daily and stay engaged with their culture. By making art easier, we ensure that Rangoli remains a vibrant part of our homes for generations to come.
 
 
-**Meet our team**
+**Meet our Team**
+ 
+School: *HomeSchooling*
+ 
+Project Name: *Automatic Rangoli Maker Robot by RoboArt Squad*
+ 
+We are RoboArt Squad, a team of 3 students passionate about Robotics & AI.
+ 
+• Aarav (Grade 9) is a skilled robotics and AI enthusiast who builds complex, yet practical solutions to modern problems,. He is currently working on an operating system for general purpose robots. He is also passionate about percussion, cricket and is deeply fascinated by nature through trekking and running while caring for nature conservation
+• Riya (Grade 8) is passionate about robotics, electronics, programming and traditional Indian arts. She often makes projects that are creatively very personal to her. She also seizes opportunities in such projects to experiment, integrate and become familiar with new and upcoming technology. She is also an athlete being an avid badminton and basketball player, who loves music
+• Job (Grade 9) is a robotics enthusiast and loves computers. He also enjoys looking into the workings of technology and how they operate. He is keenly interested in history as well as arts and culture. His other interests include biology and english literature.
+ 
+How we divided the work
+Aarav, possessing greater technical knowledge and ability, led the design and development of all mechanical,  electronics and software systems. He also played a key role in making sure the robot works seamlessly.  Riya, leveraging her deep understanding in culture and arts, including Rangolis, played a crucial role in ideation, beauty, decorative concepts, and the Rangoli patterns. She also played key role is articulating the social impact of our robot. Job has special skills in creative expression along with technicals skills, so he extensively helped with report, presentation along with improvising of robot hardware.
 
