@@ -726,7 +726,25 @@ class ShapeApp:
         glass.bind("<Button-1>", lambda e: "break")
         glass.bind("<ButtonRelease-1>", lambda e: "break")
 
-        # No close control — user must pick Gallery / Generate / Browse.
+        close_id = glass.create_text(
+            W - 26, 26, text="✕", anchor="center",
+            fill=TEXT_DIM, font=("Segoe UI", 13, "bold"), tags="close_btn")
+
+        def _on_close_enter(e):
+            glass.itemconfig(close_id, fill=TEXT_PRIMARY)
+
+        def _on_close_leave(e):
+            glass.itemconfig(close_id, fill=TEXT_DIM)
+
+        def _on_close_click(e):
+            self._close_design_options_popup()
+            return "break"
+
+        glass.tag_bind("close_btn", "<Enter>", _on_close_enter)
+        glass.tag_bind("close_btn", "<Leave>", _on_close_leave)
+        glass.tag_bind("close_btn", "<Button-1>", _on_close_click)
+        glass.tag_bind("close_btn", "<ButtonRelease-1>", lambda e: "break")
+
         body = tk.Frame(popup, bg=BG_CARD)
         body.place(x=24, y=78, width=W - 48, height=H - 100)
         body.lift()  # ensure above the glass canvas for hit-testing
@@ -1600,7 +1618,7 @@ class ShapeApp:
 
     # ── AI GENERATED DESIGN (OpenAI) ──────────────────────────────────────
     def _get_openai_api_key(self):
-        HARDCODED_API_KEY = "ADD YOUR OPENAI API KEY HERE"
+        HARDCODED_API_KEY = "ADD YOUR OPENAI API KEY"
         return HARDCODED_API_KEY
 
     def _forget_openai_api_key(self):
