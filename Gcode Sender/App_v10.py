@@ -77,6 +77,14 @@ LEARN_VIDEO_FILE = os.path.join(_APP_DIR, "learn_intro.mov")
 # remember the choice. The capture itself runs off whatever this installs.
 CAMERA_CONFIG_FILE = os.path.join(_APP_DIR, "camera_config.json")
 LEARN_PHOTO_DIR    = os.path.join(_APP_DIR, "learn_photos")
+
+# Every scored Learn Mode attempt is appended here, so the app can show that a
+# learner is actually improving rather than just that they used it once. This
+# is the evidence behind the Progress & Impact dashboard.
+LEARN_PROGRESS_FILE = os.path.join(_APP_DIR, "learn_progress.json")
+
+# A design counts as "mastered" once an attempt at it scores this or better.
+MASTERY_SCORE = 8
 CAMERA_PROBE_COUNT = 6      # device indices tried by a scan (0 … N-1)
 CAMERA_WARMUP_FRAMES = 3    # USB webcams hand back a black first frame or two
 
@@ -1120,6 +1128,17 @@ class ShapeApp:
         self._learn_photo_path = None     # last photo taken of the real mat
         self._load_camera_config()
 
+        # ── Progress & Impact: scored-attempt history ────────────────────
+        self._progress          = {"version": 1, "last_learner": "",
+                                   "sessions": []}
+        self._learn_learner     = ""      # who is practising right now
+        self._progress_popup    = None
+        self._progress_filter   = None    # learner shown in the dashboard
+        self._progress_body     = None    # dashboard's repaintable content frame
+        self._progress_imgs     = []      # PhotoImages the dashboard must keep
+        self._learn_recorded_for = None   # eval popup already written to disk
+        self._load_learn_progress()
+
         # ── Live camera panel: shows the installed camera's feed while the
         # robot is drawing, floating over the canvas. ─────────────────────
         self._live_cam_cap    = None      # open cv2.VideoCapture while live
@@ -1891,7 +1910,7 @@ class ShapeApp:
             self._close_features_popup()
             return
         self.root.update_idletasks()
-        W, H = S(400), S(360)
+        W, H = S(400), S(470)
         sx = self.root.winfo_screenwidth()  // 2 - W // 2
         sy = self.root.winfo_screenheight() // 2 - H // 2
 
@@ -1949,6 +1968,20 @@ class ShapeApp:
         tk.Label(body,
                  text="Photograph your surroundings and the AI will sketch "
                       "a rangoli inspired by it.",
+                 bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(9)),
+                 wraplength=W-60, justify="left").pack(anchor="w")
+
+        # Progress & Impact — the saved history of every scored Learn attempt
+        prog_row = tk.Frame(body, bg=BG_CARD)
+        prog_row.pack(fill="x", pady=(S(14), S(6)))
+        tk.Label(prog_row, text="Progress & Impact", bg=BG_CARD, fg=TEXT_PRIMARY,
+                 font=("Segoe UI", FS(12), "bold")).pack(side="left")
+        self._small_btn(
+            prog_row, "Open", self._open_progress_dashboard,
+            ACCENT_CYAN, self._lighten(ACCENT_CYAN, -30))
+        tk.Label(body,
+                 text="See how your Learn Mode scores have improved over time, "
+                      "with before and after photos.",
                  bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(9)),
                  wraplength=W-60, justify="left").pack(anchor="w")
 
@@ -3020,7 +3053,23 @@ class ShapeApp:
 
     # ── AI GENERATED DESIGN (OpenAI) ──────────────────────────────────────
     def _get_openai_api_key(self):
-        HARDCODED_API_KEY = ""
+        """Key used by every AI feature: design generation, Picture to Rangoli,
+        AI effects and Learn Mode photo scoring.
+
+        An openai_key.txt beside the app wins if it exists, so the key can be
+        swapped (or kept out of a shared copy of this file) without editing
+        source. The hardcoded value below is the fallback.
+        """
+        try:
+            with open(AI_KEY_FILE, "r", encoding="utf-8") as fh:
+                key = fh.read().strip()
+            if key:
+                return key
+        except OSError:
+            pass
+
+        HARDCODED_API_KEY = "sk-REPLACE_WITH_YOUR_KEY"
+        return HARDCODED_API_KEY
 
     def _forget_openai_api_key(self):
         try:
@@ -4691,8 +4740,26 @@ class ShapeApp:
             "Pick a rangoli. The robot will draw it one part at a time so you "
             "can copy each part by hand.", outline=ACCENT_BLUE)
 
-        scroll_cv = tk.Canvas(body, bg=BG_CARD, highlightthickness=0)
-        scroll_sb = tk.Scrollbar(body, orient="vertical", command=scroll_cv.yview)
+        # Who the attempt gets filed under. Shown here rather than as a blocking
+        # prompt so the lesson flow is unchanged for anyone who ignores it.
+        who = tk.Frame(body, bg=BG_CARD)
+        who.pack(fill="x", pady=(0, S(8)))
+        tk.Label(who, text="Practising as:", bg=BG_CARD, fg=TEXT_DIM,
+                 font=("Segoe UI", FS(10))).pack(side="left")
+        tk.Label(who, text=self._learn_learner or "Guest", bg=BG_CARD,
+                 fg=ACCENT_CYAN, font=("Segoe UI", FS(10), "bold")).pack(
+                     side="left", padx=(S(6), S(10)))
+        self._color_button(
+            who, "Change", lambda: self._prompt_learner_name(
+                self._open_learn_gallery),
+            BG_INPUT, width=S(88), height=S(28), font_size=FS(10),
+            text_color=TEXT_PRIMARY, corner_radius=S(14)).pack(side="left")
+
+        scroll_host = tk.Frame(body, bg=BG_CARD)
+        scroll_host.pack(fill="both", expand=True)
+        scroll_cv = tk.Canvas(scroll_host, bg=BG_CARD, highlightthickness=0)
+        scroll_sb = tk.Scrollbar(scroll_host, orient="vertical",
+                                 command=scroll_cv.yview)
         inner = tk.Frame(scroll_cv, bg=BG_CARD)
         scroll_cv.configure(yscrollcommand=scroll_sb.set)
         scroll_sb.pack(side="right", fill="y")
@@ -6006,6 +6073,14 @@ class ShapeApp:
                                 ACCENT_PURP, width=W - 2*pad, height=BTN_H,
                                 font_size=FS(13), corner_radius=S(14))
         b2.place(x=pad, y=btn_y + BTN_H + 12)
+
+        # Persist the attempt exactly once per result card. ``note`` is set
+        # only when the fallback verdict was used, so it doubles as the flag
+        # that says this score wasn't earned against a real photo.
+        if self._learn_recorded_for is not popup:
+            self._learn_recorded_for = popup
+            self._record_learn_session(verdict, "sample" if note else "ai")
+
     def _show_learn_complete(self):
         W, H = S(460), S(300)
         _, body = self._learn_shell(
@@ -6049,6 +6124,490 @@ class ShapeApp:
         try: popup.destroy()
         except Exception: pass
         self._learn_popup = None
+
+    # ── Progress & Impact: the scored-attempt store ──────────────────────────
+    # Learn Mode already produces a real judgement of each hand-drawn rangoli;
+    # until now it was shown once and thrown away. Persisting it is what lets
+    # the app answer "is this actually teaching anyone?" with data.
+    def _load_learn_progress(self):
+        """Read the history file into memory.
+
+        Runs from __init__, before the console exists, so problems stay silent
+        — a missing or corrupt file simply means "no history yet", which must
+        never stop Learn Mode from running.
+        """
+        try:
+            with open(LEARN_PROGRESS_FILE, "r", encoding="utf-8") as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict) and isinstance(loaded.get("sessions"), list):
+                self._progress["sessions"] = [
+                    s for s in loaded["sessions"] if isinstance(s, dict)]
+                self._progress["last_learner"] = str(
+                    loaded.get("last_learner") or "")
+        except Exception:
+            pass
+        self._learn_learner = self._progress.get("last_learner") or ""
+
+    def _save_learn_progress(self):
+        self._progress["last_learner"] = self._learn_learner
+        try:
+            with open(LEARN_PROGRESS_FILE, "w", encoding="utf-8") as fh:
+                json.dump(self._progress, fh, indent=2)
+            return True
+        except OSError as e:
+            self.log_to_console(f"Progress: couldn't save history — {e}", "err")
+            return False
+
+    def _record_learn_session(self, verdict, scored_by):
+        """Append one finished Learn Mode attempt to the history file.
+
+        ``scored_by`` is "ai" when a real photo was judged and "sample" when
+        the hardcoded fallback verdict was shown instead. Sample rows are kept
+        so the practice still shows up, but they are excluded from every
+        statistic — a fallback is always 9/10 and would otherwise invent an
+        improvement curve nobody earned.
+        """
+        photo = self._learn_photo_path
+        if photo:
+            try:
+                photo = os.path.relpath(photo, _APP_DIR)
+            except ValueError:      # different drive on Windows
+                pass
+        entry = {
+            "learner":    self._learn_learner or "Guest",
+            "design":     verdict.get("name", "Rangoli"),
+            "complexity": verdict.get("complexity", ""),
+            "score":      verdict.get("score", 0),
+            "out_of":     verdict.get("out_of", 10),
+            "scored_by":  scored_by,
+            "timestamp":  time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "photo":      photo or "",
+            "improvements": list(verdict.get("improvements", []))[:3],
+        }
+        self._progress["sessions"].append(entry)
+        if self._save_learn_progress():
+            self.log_to_console(
+                f"Progress: saved {entry['learner']}'s attempt at "
+                f"'{entry['design']}' ({entry['score']}/{entry['out_of']}, "
+                f"{scored_by}).", "info")
+
+    def _progress_learners(self):
+        """Every learner name in the history, most recently active first."""
+        seen = []
+        for s in reversed(self._progress["sessions"]):
+            name = s.get("learner") or "Guest"
+            if name not in seen:
+                seen.append(name)
+        return seen
+
+    def _progress_sessions_for(self, learner):
+        """Return (scored_rows, sample_count) for one learner, or all of them
+        when ``learner`` is None. Rows come back oldest-first."""
+        rows = [s for s in self._progress["sessions"]
+                if learner is None or (s.get("learner") or "Guest") == learner]
+        scored = [s for s in rows if s.get("scored_by") == "ai"]
+        return scored, len(rows) - len(scored)
+
+    @staticmethod
+    def _progress_stats(scored):
+        """Headline numbers for the stat tiles. Empty history yields dashes so
+        the dashboard never shows a misleading zero."""
+        if not scored:
+            return {"count": 0, "avg": "—", "best": "—", "delta": "—",
+                    "mastered": 0}
+        vals = [s.get("score", 0) for s in scored]
+        best_per_design = {}
+        for s in scored:
+            d = s.get("design", "")
+            best_per_design[d] = max(best_per_design.get(d, 0), s.get("score", 0))
+        delta = "—"
+        if len(vals) >= 2:
+            diff  = vals[-1] - vals[0]
+            delta = f"+{diff}" if diff > 0 else str(diff)
+        return {
+            "count":    len(vals),
+            "avg":      f"{sum(vals) / len(vals):.1f}",
+            "best":     str(max(vals)),
+            "delta":    delta,
+            "mastered": sum(1 for v in best_per_design.values() if v >= MASTERY_SCORE),
+        }
+
+    # ── Progress & Impact: the dashboard ─────────────────────────────────────
+    def _close_progress_popup(self):
+        popup = self._progress_popup
+        self._progress_popup = None
+        self._progress_imgs  = []
+        if popup is None:
+            return
+        try: popup.unbind_all("<MouseWheel>")
+        except Exception: pass
+        try: popup.destroy()
+        except Exception: pass
+
+    def _open_progress_dashboard(self):
+        """Features popup > Progress & Impact.
+
+        Deliberately independent of ``_learn_popup``: opening it must not tear
+        down a lesson in progress, and it has to be viewable without entering
+        Learn Mode at all (that is how it gets shown to a judge).
+        """
+        self._close_features_popup()
+        self._close_progress_popup()
+        self.root.update_idletasks()
+
+        # Height leaves ~30px of slack below the content: font metrics differ
+        # between machines and the footer must never be pushed off the card.
+        W, H = S(880), S(730)
+        sx = self.root.winfo_screenwidth()  // 2 - W // 2
+        sy = max(S(20), self.root.winfo_screenheight() // 2 - H // 2)
+
+        popup = tk.Toplevel(self.root)
+        popup.overrideredirect(True)
+        popup.attributes("-topmost", True)
+        try: popup.attributes("-alpha", 0.0)
+        except tk.TclError: pass
+        popup.geometry(f"{W}x{H}+{sx}+{sy}")
+        popup.configure(bg=BG_DARK)
+        popup.transient(self.root)
+        self._progress_popup = popup
+
+        glass = tk.Canvas(popup, width=W, height=H, bg=BG_DARK,
+                          highlightthickness=0)
+        glass.pack(fill="both", expand=True)
+        self._draw_rounded_rect(glass, 4, 4, W - 4, H - 4, radius=S(22),
+                                fill=BG_CARD, outline=ACCENT_CYAN, width=2)
+        glass.create_text(28, 30, text="Progress & Impact", anchor="w",
+                          fill=TEXT_PRIMARY, font=("Segoe UI", FS(16), "bold"))
+        glass.create_text(28, 56,
+                          text="Every scored Learn Mode attempt, so you can see "
+                               "hands actually getting steadier over time.",
+                          anchor="w", fill=TEXT_DIM, font=("Segoe UI", FS(9)),
+                          width=W - 90)
+
+        close_lbl = tk.Label(popup, text="✕", bg=BG_CARD, fg=TEXT_DIM,
+                             font=("Segoe UI", FS(14), "bold"), cursor="hand2")
+        close_lbl.place(x=W - 42, y=20)
+        close_lbl.bind("<Button-1>", lambda e: self._close_progress_popup())
+
+        body = tk.Frame(popup, bg=BG_CARD)
+        body.place(x=26, y=84, width=W - 52, height=H - 84 - 22)
+        self._progress_body = body
+        self._progress_filter = self._learn_learner or None
+        self._render_progress_body()
+
+        self._fade(popup, 0.0, 0.98, 0.08)
+        popup.lift()
+        popup.focus_force()
+
+    def _render_progress_body(self):
+        """Paint (or repaint, after a learner-filter change) the dashboard."""
+        body = self._progress_body
+        try:
+            if not body.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        for w in body.winfo_children():
+            w.destroy()
+        self._progress_imgs = []
+
+        BW = body.winfo_width() or (S(880) - 52)
+        learners = self._progress_learners()
+        if self._progress_filter not in learners:
+            self._progress_filter = None
+        scored, samples = self._progress_sessions_for(self._progress_filter)
+        stats = self._progress_stats(scored)
+
+        # ── learner filter chips ─────────────────────────────────────────
+        chips = tk.Frame(body, bg=BG_CARD)
+        chips.pack(fill="x", pady=(0, S(10)))
+        tk.Label(chips, text="Showing:", bg=BG_CARD, fg=TEXT_DIM,
+                 font=("Segoe UI", FS(10))).pack(side="left", padx=(0, S(8)))
+
+        def _chip(text, value):
+            active = (self._progress_filter == value)
+            b = self._color_button(
+                chips, text, lambda v=value: self._set_progress_filter(v),
+                ACCENT_CYAN if active else BG_INPUT,
+                width=S(104), height=S(30), font_size=FS(10),
+                text_color="#0a0a0f" if active else TEXT_PRIMARY,
+                corner_radius=S(15))
+            b.pack(side="left", padx=(0, S(6)))
+
+        _chip("Everyone", None)
+        for name in learners[:5]:
+            _chip(name, name)
+
+        # ── stat tiles ───────────────────────────────────────────────────
+        tiles = tk.Frame(body, bg=BG_CARD)
+        tiles.pack(fill="x", pady=(0, S(12)))
+        tile_specs = [
+            ("Scored attempts", str(stats["count"]),          ACCENT_BLUE),
+            ("Average score",   stats["avg"],                 ACCENT_CYAN),
+            ("Best score",      stats["best"],                ACCENT_GREEN),
+            ("First → latest",  stats["delta"],               ACCENT_PINK),
+            ("Designs mastered", str(stats["mastered"]),      ACCENT_PURP),
+        ]
+        for i, (label, value, colour) in enumerate(tile_specs):
+            tiles.grid_columnconfigure(i, weight=1, uniform="tile")
+            card = tk.Frame(tiles, bg=BG_INPUT, highlightthickness=1,
+                            highlightbackground=colour)
+            card.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else S(6), 0))
+            tk.Label(card, text=value, bg=BG_INPUT, fg=colour,
+                     font=("Segoe UI", FS(22), "bold")).pack(pady=(S(10), 0))
+            tk.Label(card, text=label, bg=BG_INPUT, fg=TEXT_DIM,
+                     font=("Segoe UI", FS(9))).pack(pady=(0, S(10)))
+
+        # ── score-over-time chart ────────────────────────────────────────
+        chart_h = S(210)
+        chart = tk.Canvas(body, height=chart_h, bg=BG_INPUT,
+                          highlightthickness=0)
+        chart.pack(fill="x", pady=(0, S(12)))
+        chart.bind("<Configure>",
+                   lambda e, c=chart, s=scored: self._draw_progress_chart(
+                       c, e.width, e.height, s))
+
+        # ── before / after photo pair ────────────────────────────────────
+        self._build_progress_photos(body, scored, BW)
+
+        # ── footer: sample-run note + export ─────────────────────────────
+        foot = tk.Frame(body, bg=BG_CARD)
+        foot.pack(fill="x", side="bottom")
+        note = ""
+        if samples:
+            note = (f"{samples} practice run{'s' if samples != 1 else ''} not "
+                    f"counted — no AI score was available.")
+        tk.Label(foot, text=note, bg=BG_CARD, fg=TEXT_DIM,
+                 font=("Segoe UI", FS(9)), justify="left").pack(side="left")
+        self._color_button(foot, "Export CSV", self._export_progress_csv,
+                           ACCENT_GREEN, width=S(120), height=S(34),
+                           font_size=FS(11)).pack(side="right")
+
+    def _set_progress_filter(self, learner):
+        self._progress_filter = learner
+        self._render_progress_body()
+
+    def _draw_progress_chart(self, cv, w, h, scored):
+        """Score-over-time line, drawn straight onto a Tk canvas so the chart
+        needs no plotting library and renders identically offline."""
+        try:
+            cv.delete("all")
+        except tk.TclError:
+            return
+        pad_l, pad_r, pad_t, pad_b = S(38), S(16), S(24), S(28)
+        x0, y0 = pad_l, pad_t
+        x1, y1 = max(pad_l + 1, w - pad_r), max(pad_t + 1, h - pad_b)
+
+        cv.create_text(pad_l, S(12), text="Score out of 10, oldest attempt first",
+                       anchor="w", fill=TEXT_DIM, font=("Segoe UI", FS(9)))
+
+        if not scored:
+            cv.create_text((x0 + x1) // 2, (y0 + y1) // 2,
+                           text="No scored attempts yet — finish a Learn Mode "
+                                "lesson with a photo to start the curve.",
+                           fill=TEXT_DIM, font=("Segoe UI", FS(10)))
+            return
+
+        out_of = max(1, scored[0].get("out_of", 10))
+        for v in range(0, out_of + 1, max(1, out_of // 5)):
+            gy = y1 - (y1 - y0) * (v / out_of)
+            cv.create_line(x0, gy, x1, gy, fill="#33334d")
+            cv.create_text(x0 - S(8), gy, text=str(v), anchor="e",
+                           fill=TEXT_DIM, font=("Segoe UI", FS(8)))
+
+        n = len(scored)
+        span = (x1 - x0) if n == 1 else (x1 - x0) / (n - 1)
+        pts = []
+        for i, s in enumerate(scored):
+            px = x0 + (span / 2 if n == 1 else span * i)
+            py = y1 - (y1 - y0) * (max(0, min(out_of, s.get("score", 0))) / out_of)
+            pts.append((px, py))
+
+        if n >= 2:
+            flat = [c for p in pts for c in p]
+            cv.create_line(*flat, fill=ACCENT_CYAN, width=S(3),
+                           smooth=True, capstyle="round", joinstyle="round")
+            # trend line: first attempt to latest, so the direction is unmissable
+            cv.create_line(pts[0][0], pts[0][1], pts[-1][0], pts[-1][1],
+                           fill=ACCENT_PINK, width=S(2), dash=(6, 4))
+
+        r = S(5)
+        for i, (px, py) in enumerate(pts):
+            colour = (ACCENT_GREEN if scored[i].get("score", 0) >= MASTERY_SCORE
+                      else ACCENT_CYAN)
+            cv.create_oval(px - r, py - r, px + r, py + r,
+                           fill=colour, outline=BG_INPUT, width=S(2))
+
+        # x-axis: only the ends are labelled, otherwise long histories collide
+        first_d = (scored[0].get("timestamp", "")[:10] or "first")
+        last_d  = (scored[-1].get("timestamp", "")[:10] or "latest")
+        cv.create_text(pts[0][0], y1 + S(14), text=first_d, anchor="n",
+                       fill=TEXT_DIM, font=("Segoe UI", FS(8)))
+        if n >= 2:
+            cv.create_text(pts[-1][0], y1 + S(14), text=last_d, anchor="n",
+                           fill=TEXT_DIM, font=("Segoe UI", FS(8)))
+
+    def _build_progress_photos(self, parent, scored, avail_w):
+        """First-ever vs most-recent photo, side by side — the single most
+        persuasive thing this dashboard shows."""
+        row = tk.Frame(parent, bg=BG_CARD)
+        row.pack(fill="x", pady=(0, S(10)))
+
+        withpic = [s for s in scored if s.get("photo")]
+        pairs = []
+        if withpic:
+            pairs.append(("First attempt", withpic[0]))
+            if len(withpic) >= 2:
+                pairs.append(("Latest attempt", withpic[-1]))
+        if not pairs:
+            tk.Label(row, text="Photos of your scored attempts will appear here.",
+                     bg=BG_CARD, fg=TEXT_DIM,
+                     font=("Segoe UI", FS(9))).pack(anchor="w")
+            return
+
+        thumb = S(150)
+        for i, (caption, sess) in enumerate(pairs):
+            card = tk.Frame(row, bg=BG_INPUT)
+            card.pack(side="left", padx=(0 if i == 0 else S(10), 0))
+            img = self._progress_thumbnail(sess.get("photo", ""), thumb)
+            if img is not None:
+                self._progress_imgs.append(img)
+                tk.Label(card, image=img, bg=BG_INPUT).pack(padx=S(6),
+                                                            pady=(S(6), S(2)))
+            else:
+                tk.Label(card, text="photo missing", width=S(18), height=S(7),
+                         bg=CANVAS_BG, fg=TEXT_DIM,
+                         font=("Segoe UI", FS(9))).pack(padx=S(6),
+                                                        pady=(S(6), S(2)))
+            tk.Label(card, text=caption, bg=BG_INPUT, fg=TEXT_PRIMARY,
+                     font=("Segoe UI", FS(10), "bold")).pack()
+            tk.Label(card,
+                     text=f"{sess.get('design', '')} · "
+                          f"{sess.get('score', 0)}/{sess.get('out_of', 10)}",
+                     bg=BG_INPUT, fg=TEXT_DIM,
+                     font=("Segoe UI", FS(9))).pack(pady=(0, S(8)))
+
+        if len(pairs) == 2:
+            gain = pairs[1][1].get("score", 0) - pairs[0][1].get("score", 0)
+            verdict = ("improved by" if gain > 0 else
+                       "changed by" if gain < 0 else "held steady at")
+            text = (f"{verdict} {abs(gain)} point{'s' if abs(gain) != 1 else ''}"
+                    if gain else "held steady")
+            side = tk.Frame(row, bg=BG_CARD)
+            side.pack(side="left", padx=(S(16), 0), anchor="n")
+            tk.Label(side, text="Between these two attempts the score",
+                     bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(10)),
+                     wraplength=S(220), justify="left").pack(anchor="w",
+                                                             pady=(S(20), 0))
+            tk.Label(side, text=text, bg=BG_CARD,
+                     fg=ACCENT_GREEN if gain > 0 else TEXT_PRIMARY,
+                     font=("Segoe UI", FS(14), "bold"),
+                     wraplength=S(220), justify="left").pack(anchor="w")
+
+    def _progress_thumbnail(self, rel_path, size):
+        """Load a stored attempt photo as a square-ish thumbnail, or None."""
+        if not rel_path:
+            return None
+        path = rel_path if os.path.isabs(rel_path) else os.path.join(_APP_DIR,
+                                                                     rel_path)
+        if not os.path.exists(path):
+            return None
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(path)
+            img.thumbnail((size, size))
+            return ImageTk.PhotoImage(img)
+        except Exception:
+            return None
+
+    def _export_progress_csv(self):
+        """Write the history out flat — this is what goes in the engineering
+        journal and the presentation, so it includes the unscored runs too and
+        marks them as such."""
+        import csv
+        rows = self._progress["sessions"]
+        if not rows:
+            self.show_hint_popup("No practice history to export yet")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Export progress history",
+            defaultextension=".csv",
+            initialfile="rangoli_progress.csv",
+            filetypes=[("CSV file", "*.csv"), ("All files", "*.*")])
+        if not path:
+            return
+        cols = ["timestamp", "learner", "design", "complexity", "score",
+                "out_of", "scored_by", "photo"]
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh)
+                w.writerow(cols + ["improvements"])
+                for s in rows:
+                    w.writerow([s.get(c, "") for c in cols]
+                               + [" | ".join(s.get("improvements", []))])
+        except OSError as e:
+            self.show_hint_popup(f"Export failed — {e}")
+            self.log_to_console(f"Progress: export failed — {e}", "err")
+            return
+        self.show_hint_popup(f"Exported {len(rows)} attempts")
+        self.log_to_console(f"Progress: exported {len(rows)} attempts to {path}",
+                            "recv")
+
+    def _prompt_learner_name(self, on_done=None):
+        """Ask who is practising. Kept tiny and non-blocking — Learn Mode still
+        works untouched if the user just closes it (attempts land on 'Guest')."""
+        W, H = S(420), S(210)
+        self.root.update_idletasks()
+        sx = self.root.winfo_screenwidth()  // 2 - W // 2
+        sy = self.root.winfo_screenheight() // 2 - H // 2
+
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.geometry(f"{W}x{H}+{sx}+{sy}")
+        win.configure(bg=BG_DARK)
+        win.transient(self.root)
+
+        glass = tk.Canvas(win, width=W, height=H, bg=BG_DARK,
+                          highlightthickness=0)
+        glass.place(x=0, y=0, width=W, height=H)
+        self._draw_rounded_rect(glass, 4, 4, W - 4, H - 4, radius=S(18),
+                                fill=BG_CARD, outline=ACCENT_BLUE, width=2)
+        glass.create_text(24, 30, text="Who's practising?", anchor="w",
+                          fill=TEXT_PRIMARY, font=("Segoe UI", FS(14), "bold"))
+        glass.create_text(24, 56,
+                          text="Scores are saved under this name so progress "
+                               "can be tracked per person.",
+                          anchor="w", fill=TEXT_DIM, font=("Segoe UI", FS(9)),
+                          width=W - 48)
+
+        entry = ctk.CTkEntry(win, width=W - S(60), height=S(38),
+                             placeholder_text="Your name",
+                             fg_color=BG_INPUT, border_color=GLASS_EDGE,
+                             text_color=TEXT_PRIMARY,
+                             font=("Segoe UI", FS(11)))
+        entry.place(x=S(30), y=S(92))
+        if self._learn_learner:
+            entry.insert(0, self._learn_learner)
+
+        def _finish():
+            name = entry.get().strip()[:40]
+            if name:
+                self._learn_learner = name
+                self._save_learn_progress()
+                self.log_to_console(f"Progress: practising as {name}.", "info")
+            try: win.destroy()
+            except Exception: pass
+            if on_done:
+                on_done()
+
+        entry.bind("<Return>", lambda e: _finish())
+        self._color_button(win, "Save", _finish, ACCENT_GREEN,
+                           width=W - S(60), height=S(40),
+                           font_size=FS(12)).place(x=S(30), y=S(146))
+        win.lift()
+        win.focus_force()
+        entry.focus_set()
 
     # ── Canvas interactions ───────────────────────────────────────────────────
     def on_canvas_click(self, event):
