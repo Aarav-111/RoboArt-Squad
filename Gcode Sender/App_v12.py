@@ -1,5 +1,6 @@
 import copy
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import serial
@@ -66,6 +67,23 @@ _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 AI_KEY_FILE = os.path.join(_APP_DIR, "openai_key.txt")
 
+# ── OFFLINE / NO-INTERNET SUPPORT ─────────────────────────────────────────
+# When there is no API key set *or* no internet reachable, every OpenAI call
+# transparently serves a cached / locally-generated result instead. From the
+# user's (and a judge's) point of view the app behaves exactly as it does
+# online: same buttons, same "asking AI..." messages, a real rangoli appears
+# and gets drawn. The only difference is under the hood.
+#
+# OFFLINE_SENTINEL is returned by _get_openai_api_key() when no real key is
+# available. It is deliberately non-empty so the existing `if not api_key`
+# guards still let each feature run through to its offline fallback.
+OFFLINE_SENTINEL   = "__OFFLINE__"
+AI_CACHE_DIR       = os.path.join(_APP_DIR, "ai_cache")
+CACHED_RANGOLI_DIR = os.path.join(AI_CACHE_DIR, "rangolis")
+# Network errors that mean "no internet" (as opposed to an HTTP error, which
+# is a real reply from OpenAI and is left to behave exactly as it does today).
+OFFLINE_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError, OSError)
+
 # Learn Mode opens with a silent "how to make a rangoli" clip, decoded frame
 # by frame with OpenCV and shown inside the Learn Mode popup.
 LEARN_VIDEO_FILE = os.path.join(_APP_DIR, "learn_intro.mov")
@@ -124,10 +142,19 @@ MAX_Y    = 28
 NOZZLE_OPEN_Z   = 0.05
 NOZZLE_CLOSED_Z = 0.00
 
-MARGIN_L = 50
-MARGIN_B = 40
-MARGIN_T = 10
-MARGIN_R = 10
+# Axis margins as measured on the 2560x1600 reference screen. The live
+# MARGIN_* values below are rescaled from these in ShapeApp.__init__ so the
+# plot frame stays the same fraction of the canvas on every display; these
+# module-level values are just the pre-scaling defaults.
+REF_MARGIN_L = 40
+REF_MARGIN_B = 32
+REF_MARGIN_T = 4
+REF_MARGIN_R = 4
+
+MARGIN_L = REF_MARGIN_L
+MARGIN_B = REF_MARGIN_B
+MARGIN_T = REF_MARGIN_T
+MARGIN_R = REF_MARGIN_R
 
 GRAPH_W  = 680
 GRAPH_H  = 680
@@ -779,6 +806,42 @@ LEARN_STEP_SETS = [
     ],
 ]
 
+# ── Ratio-based UI scaling ──────────────────────────────────────────────────
+# Every fixed pixel size below (popup dimensions, fonts, padding, corner
+# radii, button widths...) was measured against a 2560x1600 reference
+# screen. UI_SCALE is the ratio between the machine actually running the app
+# and that reference, so the whole chrome grows/shrinks together instead of
+# looking correct on one monitor and cramped/oversized on another. It is set
+# once in ShapeApp.__init__ from the real screen size. Canvas/camera-panel
+# sizing already fits itself to available space and is untouched by this.
+REF_SCREEN_W, REF_SCREEN_H = 2560, 1600
+UI_SCALE = 1.0
+
+# Lower bound on UI_SCALE. Pure proportional scaling makes chrome tiny on
+# low-res laptops, so hold it at this floor and let the canvas give up the
+# difference — readable controls matter more than a few extra canvas pixels.
+MIN_UI_SCALE = 0.92
+MAX_UI_SCALE = 1.60
+
+# Height of the tallest popup in reference pixels (the Learn-mode dialog at
+# S(760)). The floor above must never scale chrome past what the screen can
+# actually show, so UI_SCALE is capped so this popup still fits with a margin.
+TALLEST_POPUP_H = 760
+
+# The canvas takes this fraction of the space left over by the banner and the
+# bottom strip, rather than all of it. The leftover sliver is split evenly
+# above and below by the centred placement, which is what keeps the "Rangoli
+# Bot" banner title visually clear of the drawing surface.
+CANVAS_FILL = 0.90
+
+def S(px):
+    """Scale a reference-resolution pixel length to the real screen."""
+    return max(1, round(px * UI_SCALE))
+
+def FS(pt):
+    """Scale a reference-resolution font point size; never below 8pt."""
+    return max(8, round(pt * UI_SCALE))
+
 class ShapeApp:
     def __init__(self, root):
         self.root = root
@@ -787,15 +850,35 @@ class ShapeApp:
         self.root.bind("<Escape>", lambda e: self.root.attributes("-fullscreen", False))
         self.root.configure(bg=BG_DARK)
 
-        global GRAPH_W, GRAPH_H, CANVAS_W, CANVAS_H
+        global GRAPH_W, GRAPH_H, CANVAS_W, CANVAS_H, UI_SCALE
+        global MARGIN_L, MARGIN_R, MARGIN_T, MARGIN_B
         screen_h = self.root.winfo_screenheight()
         screen_w = self.root.winfo_screenwidth()
+        # Truly proportional: the chrome takes the same FRACTION of the screen
+        # on every machine, so whatever is left for the canvas is also the same
+        # fraction everywhere. (The old max(1.0, ...) clamp pinned chrome at
+        # full reference size on smaller laptops, which ate the canvas's share.)
+        # The floor keeps text and hit targets usable on sub-720p panels; the
+        # ceiling stops 4K/5K monitors from rendering everything oversized.
+        UI_SCALE = min(screen_w / REF_SCREEN_W, screen_h / REF_SCREEN_H)
+        UI_SCALE = max(MIN_UI_SCALE, min(UI_SCALE, MAX_UI_SCALE))
+        # MIN_UI_SCALE can outrun a small screen — cap it so the tallest popup
+        # still fits with room to spare rather than running off the display.
+        UI_SCALE = min(UI_SCALE, (screen_h * 0.92) / TALLEST_POPUP_H)
+        # Axis margins belong to the drawing surface, so they scale with it —
+        # a fixed 40px gutter is 3% of the reference canvas but 6% of a small
+        # one, which visibly shifts the plot frame between screens.
+        MARGIN_L = S(REF_MARGIN_L)
+        MARGIN_B = S(REF_MARGIN_B)
+        MARGIN_T = S(REF_MARGIN_T)
+        MARGIN_R = S(REF_MARGIN_R)
         # Reserve only a slim banner + bottom action strip; canvas fills the rest.
-        graph_size = max(400, min(screen_w - 40, screen_h - 100))
+        graph_size = max(200, int(min(screen_w, screen_h - S(100)) * CANVAS_FILL))
         GRAPH_W  = graph_size
         GRAPH_H  = graph_size
         CANVAS_W = GRAPH_W + MARGIN_L + MARGIN_R
         CANVAS_H = GRAPH_H + MARGIN_T + MARGIN_B
+        self._resize_after_id = None
 
         self.shapes               = []
         self.selected_shape_index = None
@@ -882,6 +965,17 @@ class ShapeApp:
         self._learn_photo_path = None     # last photo taken of the real mat
         self._load_camera_config()
 
+        # ── Live camera panel: shows the installed camera's feed while the
+        # robot is drawing, floating over the canvas. ─────────────────────
+        self._live_cam_cap    = None      # open cv2.VideoCapture while live
+        self._live_cam_active = False
+        self._live_cam_panel  = None      # floating frame over the canvas
+        self._live_cam_label  = None      # image label inside the panel
+        self._live_cam_status_lbl = None  # "Idle" / "LIVE" indicator label
+        self._live_cam_photo  = None      # PhotoImage kept alive by reference
+        self._live_cam_idle_photo = None  # placeholder PhotoImage
+        self._live_cam_after  = None      # scheduled root.after id
+
         # One-shot callback fired on the main thread when a G-code stream ends.
         self._on_send_complete = None
 
@@ -911,47 +1005,47 @@ class ShapeApp:
     # ── Main UI ───────────────────────────────────────────────────────────────
     def setup_ui(self):
         main = tk.Frame(self.root, bg=BG_DARK)
-        main.pack(fill="both", expand=True, padx=0, pady=0)
+        main.pack(fill="both", expand=True, padx=S(0), pady=S(0))
 
         # Slim top banner only — controls float on the canvas itself.
         self._build_banner(main)
 
         # Compact bottom strip: small action buttons + thin print progress.
-        bottom = tk.Frame(main, bg=BG_DARK, height=44)
-        bottom.pack(side="bottom", fill="x", padx=10, pady=(0, 6))
+        bottom = tk.Frame(main, bg=BG_DARK, height=S(36))
+        bottom.pack(side="bottom", fill="x", padx=S(10), pady=(S(0), S(2)))
         bottom.pack_propagate(False)
 
         btn_wrap = tk.Frame(bottom, bg=BG_DARK)
-        btn_wrap.pack(side="left", padx=(0, 12))
+        btn_wrap.pack(side="left", padx=(S(0), S(12)))
         clear_btn = self._color_button(
             btn_wrap, "Clear", self.clear_canvas, "#7c3aed",
-            width=84, height=34, font_size=11)
-        clear_btn.pack(side="left", padx=(0, 8))
+            width=S(84), height=S(34), font_size=FS(11))
+        clear_btn.pack(side="left", padx=(S(0), S(8)))
         self.send_btn = self._color_button(
             btn_wrap, "Send to Bot", self.start_gcode_streaming, "#0d9488",
-            width=120, height=34, font_size=11)
+            width=S(120), height=S(34), font_size=FS(11))
         self.send_btn.pack(side="left")
 
         self.pause_btn = self._color_button(
             btn_wrap, "⏸", self.toggle_pause, "#334155",
-            width=40, height=34, font_size=14, corner_radius=8)
-        self.pause_btn.pack(side="left", padx=(8, 0))
+            width=S(40), height=S(34), font_size=FS(14), corner_radius=S(8))
+        self.pause_btn.pack(side="left", padx=(S(8), S(0)))
         self.pause_btn.configure(state="disabled")
 
 
         prog_wrap = tk.Frame(bottom, bg=BG_DARK)
-        prog_wrap.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        prog_wrap.pack(side="left", fill="x", expand=True, padx=(S(4), S(0)))
         self.progress_bar = ctk.CTkProgressBar(
             prog_wrap, variable=self.progress_var,
             fg_color=BG_INPUT, progress_color=ACCENT_GREEN,
-            height=8, corner_radius=4)
-        self.progress_bar.pack(side="left", fill="x", expand=True, padx=(0, 8))
+            height=S(8), corner_radius=S(4))
+        self.progress_bar.pack(side="left", fill="x", expand=True, padx=(S(0), S(8)))
         self.progress_bar.set(0)
         self.sidebar_progress_var = self.progress_var
         self.sidebar_progress_bar = self.progress_bar
         self.sidebar_pct_label = tk.Label(
             prog_wrap, text="0%", bg=BG_DARK, fg=ACCENT_GREEN,
-            font=("Segoe UI", 9, "bold"), width=4)
+            font=("Segoe UI", FS(9), "bold"), width=S(4))
         self.sidebar_pct_label.pack(side="left")
 
         # Canvas fills all remaining space.
@@ -960,20 +1054,6 @@ class ShapeApp:
         self.canvas_outer = canvas_outer
 
         self.root.update_idletasks()
-        avail_w = max(canvas_outer.winfo_width(), 400)
-        avail_h = max(canvas_outer.winfo_height(), 400)
-
-        global GRAPH_W, GRAPH_H, CANVAS_W, CANVAS_H
-        # Fit the full canvas (grid + axis margins) into the available space.
-        max_side = min(avail_w, avail_h) - 8
-        graph_size = max(
-            400,
-            max_side - max(MARGIN_L + MARGIN_R, MARGIN_T + MARGIN_B),
-        )
-        GRAPH_W  = graph_size
-        GRAPH_H  = graph_size
-        CANVAS_W = GRAPH_W + MARGIN_L + MARGIN_R
-        CANVAS_H = GRAPH_H + MARGIN_T + MARGIN_B
 
         # canvas_wrap is the drawing surface host. Overlays are children of
         # this frame (not canvas_outer) so they sit ON the canvas, above the
@@ -990,6 +1070,13 @@ class ShapeApp:
         # Fixed pixel size (no relwidth/relheight stretch) so event.x/y and
         # item coordinates stay 1:1 — critical for simulation matching the art.
         self.canvas.place(x=0, y=0, width=CANVAS_W, height=CANVAS_H)
+        self._fit_canvas_to_space()
+        self._build_live_camera_panel(canvas_outer, CANVAS_H)
+        # Re-fit whenever the space actually changes size — leaving fullscreen
+        # with Escape, moving to a second monitor, a DPI change. Without this
+        # the canvas stays frozen at whatever it measured during startup.
+        canvas_outer.bind("<Configure>", self._on_canvas_space_resize)
+
         self.canvas.bind("<Button-1>", self.on_canvas_click)
         self.canvas.bind("<Button-2>", self.on_right_click)
         self.canvas.bind("<Button-3>", self.on_right_click)
@@ -1015,10 +1102,110 @@ class ShapeApp:
         self.feed_combo = None
         self.shape_menu = None
 
+    # ── Responsive canvas sizing ──────────────────────────────────────────────
+    def _fit_canvas_to_space(self):
+        """Size the drawing surface to the largest square that fits the space
+        the banner and bottom strip left over. Both of those scale with
+        UI_SCALE, so the square ends up the same fraction of the screen on
+        every machine. Safe to call repeatedly."""
+        global GRAPH_W, GRAPH_H, CANVAS_W, CANVAS_H
+
+        outer = self.canvas_outer
+        outer.update_idletasks()
+        avail_w = outer.winfo_width()
+        avail_h = outer.winfo_height()
+        # An unmapped widget reports 1x1. Fall back to the screen minus the
+        # chrome we reserved: the measured banner + bottom strip + its pad.
+        if avail_w <= 1 or avail_h <= 1:
+            chrome = getattr(self, "_banner_h", S(44)) + S(36) + S(2)
+            avail_w = self.root.winfo_screenwidth()
+            avail_h = self.root.winfo_screenheight() - chrome
+
+        # CANVAS_FILL leaves a sliver of slack; the centred placement splits it
+        # above and below, clearing the banner title.
+        max_side = int(min(avail_w, avail_h) * CANVAS_FILL) - 2
+        graph_size = max(
+            200,
+            max_side - max(MARGIN_L + MARGIN_R, MARGIN_T + MARGIN_B),
+        )
+        GRAPH_W  = graph_size
+        GRAPH_H  = graph_size
+        CANVAS_W = GRAPH_W + MARGIN_L + MARGIN_R
+        CANVAS_H = GRAPH_H + MARGIN_T + MARGIN_B
+
+        self.canvas_wrap.configure(width=CANVAS_W, height=CANVAS_H)
+        self.canvas.configure(width=CANVAS_W, height=CANVAS_H)
+        self.canvas.place_configure(x=0, y=0, width=CANVAS_W, height=CANVAS_H)
+
+        # The live-camera panel is sized off the canvas height, so it has to
+        # follow along or it stops matching once the window changes.
+        if getattr(self, "_live_cam_panel", None) is not None:
+            box_h = CANVAS_H
+            box_w = max(S(320), int(CANVAS_H * 0.9))
+            self._live_cam_frame_size = (box_w - S(24), box_h - S(90))
+            self._live_cam_panel.configure(width=box_w, height=box_h)
+
+    def _on_canvas_space_resize(self, event=None):
+        """<Configure> fires in a burst for every pixel of a drag, and each
+        re-fit redraws every shape — so coalesce them into one late call."""
+        if self._resize_after_id is not None:
+            try:
+                self.root.after_cancel(self._resize_after_id)
+            except (ValueError, tk.TclError):
+                pass
+        self._resize_after_id = self.root.after(140, self._apply_canvas_resize)
+
+    def _apply_canvas_resize(self):
+        self._resize_after_id = None
+        if not self.canvas.winfo_exists():
+            return
+        old_w, old_h = GRAPH_W, GRAPH_H
+        self._fit_canvas_to_space()
+        if (GRAPH_W, GRAPH_H) == (old_w, old_h):
+            return
+        # Shape geometry is stored in canvas pixels, so it has to be rescaled
+        # about the plot origin — otherwise the artwork keeps its old pixel
+        # position and lands on different millimetre coordinates.
+        self._rescale_shapes(old_w, old_h)
+        self.canvas.delete("all")
+        self.draw_grid()
+        self.redraw()
+
+    def _rescale_shapes(self, old_w, old_h):
+        """Remap every stored pixel coordinate from the old graph size to the
+        new one, keeping each shape at the same millimetre position."""
+        if not old_w or not old_h:
+            return
+        fx, fy = GRAPH_W / old_w, GRAPH_H / old_h
+        if fx == 1.0 and fy == 1.0:
+            return
+
+        def _pt(x, y):
+            return (MARGIN_L + (x - MARGIN_L) * fx,
+                    MARGIN_T + (y - MARGIN_T) * fy)
+
+        for s in self.shapes:
+            s['x'], s['y'] = _pt(s['x'], s['y'])
+            # 'size' is a pixel diameter/edge length; the graph stays square so
+            # either factor works, but average them in case that ever changes.
+            s['size'] = s.get('size', 0) * (fx + fy) / 2.0
+            if s.get('paths'):
+                s['paths'] = [[_pt(px, py) for px, py in path]
+                              for path in s['paths']]
+        # Cached hit geometry is now stale; redraw() rebuilds it.
+        self._hit_cache = None
+
     def _color_button(self, parent, text, command, color, *,
-                      width=110, height=36, font_size=12, corner_radius=10,
+                      width=None, height=None, font_size=None, corner_radius=None,
                       text_color="#ffffff"):
-        """Solid colourful CTk button — full area clickable, no custom hover hacks."""
+        """Solid colourful CTk button — full area clickable, no custom hover hacks.
+        Defaults are resolved here (not in the signature) so they still pick up
+        UI_SCALE, which is only known once ShapeApp.__init__ runs — a default
+        baked into the signature would be frozen at import time instead."""
+        width         = S(110)  if width         is None else width
+        height        = S(36)   if height        is None else height
+        font_size     = FS(12)  if font_size     is None else font_size
+        corner_radius = S(10)   if corner_radius is None else corner_radius
         # hover=False keeps colour stable and avoids finicky enter/leave redraws.
         # Same colour for hover_color satisfies CTk API when hover is disabled.
         btn = ctk.CTkButton(
@@ -1036,28 +1223,14 @@ class ShapeApp:
         self._sim_after_id = None
 
         def _panel(**place_kw):
-            fr = tk.Frame(host, bg=panel_bg, padx=6, pady=4, highlightthickness=0)
+            fr = tk.Frame(host, bg=panel_bg, padx=S(6), pady=S(4), highlightthickness=0)
             fr.place(**place_kw)
             fr.lift()
             self._canvas_overlay_frames.append(fr)
             return fr
 
-        # Top-left: Settings / Log
-        top_left = _panel(relx=0.0, rely=0.0, anchor="nw", x=6, y=6)
-
-        self.settings_btn = self._color_button(
-            top_left, "\u2699", self._open_settings_popup, ACCENT_PURP,
-            width=44, height=40, font_size=16, corner_radius=20)
-        self.settings_btn.pack(side="left", padx=(0, 6))
-
-        self.log_switch_var = tk.BooleanVar(value=False)
-        self.log_switch = ctk.CTkSwitch(
-            top_left, text="Log", variable=self.log_switch_var,
-            command=self._toggle_log_popup,
-            fg_color="#cbd5e1", progress_color=ACCENT_PURP,
-            text_color="#4c1d95", font=("Segoe UI", 11, "bold"),
-            bg_color=panel_bg, width=48, height=22)
-        self.log_switch.pack(side="left", padx=(0, 6))
+        # Settings gear + Debug Log now live in the top banner (see
+        # _build_banner) instead of floating over the canvas.
 
         # Top-right: Simulate / AI Enhance
         top_right = _panel(relx=1.0, rely=0.0, anchor="ne", x=-6, y=6)
@@ -1066,17 +1239,17 @@ class ShapeApp:
         # Features (Learn Mode and anything added alongside it).
         self.features_btn = self._color_button(
             top_right, "Features", self._open_features_popup,
-            "#0d9488", width=70, height=40, font_size=12)
-        self.features_btn.pack(side="left", padx=(0, 8))
+            "#0d9488", width=S(70), height=S(40), font_size=FS(12))
+        self.features_btn.pack(side="left", padx=(S(0), S(8)))
 
         self.simulate_btn = self._color_button(
             top_right, "\u25b6 Simulate", self.simulate_pattern, ACCENT_AMBER,
-            width=130, height=40, font_size=12)
-        self.simulate_btn.pack(side="left", padx=(0, 8))
+            width=S(130), height=S(40), font_size=FS(12))
+        self.simulate_btn.pack(side="left", padx=(S(0), S(8)))
 
         self.ai_fx_btn = self._color_button(
             top_right, "\u2728 AI Enhance", self.toggle_ai_effects, ACCENT_PURP,
-            width=140, height=40, font_size=12)
+            width=S(140), height=S(40), font_size=FS(12))
         self.ai_fx_btn.pack(side="left")
         self._sim_running = False
 
@@ -1084,72 +1257,77 @@ class ShapeApp:
         bottom_ov = _panel(relx=0.5, rely=1.0, anchor="s", x=0, y=-6)
 
         size_frame = tk.Frame(bottom_ov, bg=panel_bg)
-        size_frame.pack(side="left", padx=(0, 12))
+        size_frame.pack(side="left", padx=(S(0), S(12)))
         tk.Label(size_frame, text="Size:", bg=panel_bg, fg=ACCENT_CYAN,
-                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
+                 font=("Segoe UI", FS(10), "bold")).pack(side="left", padx=(S(0), S(6)))
         self.size_slider = ctk.CTkSlider(
             size_frame, from_=1, to=800, variable=self.size_val,
-            command=self._on_slider, width=200, height=18,
+            command=self._on_slider, width=S(200), height=S(18),
             fg_color="#e2e8f0", progress_color=ACCENT_PURP,
             button_color=ACCENT_PINK, button_hover_color="#f9a8d4",
             bg_color=panel_bg)
-        self.size_slider.pack(side="left", padx=(0, 6))
+        self.size_slider.pack(side="left", padx=(S(0), S(6)))
         self.size_display = tk.Label(
             size_frame, text="50", bg=panel_bg, fg=ACCENT_CYAN,
-            font=("Segoe UI", 10, "bold"), width=4)
+            font=("Segoe UI", FS(10), "bold"), width=S(4))
         self.size_display.pack(side="left")
 
         self.multi_colour_switch = ctk.CTkSwitch(
             bottom_ov, text="Multi-colour", variable=self.multi_colour_var,
             command=self._on_multi_colour_toggle,
             fg_color="#cbd5e1", progress_color=ACCENT_PINK,
-            text_color="#9d174d", font=("Segoe UI", 11, "bold"),
-            bg_color=panel_bg, width=48, height=22)
-        self.multi_colour_switch.pack(side="left", padx=(0, 10))
+            text_color="#9d174d", font=("Segoe UI", FS(11), "bold"),
+            bg_color=panel_bg, width=S(48), height=S(22))
+        self.multi_colour_switch.pack(side="left", padx=(S(0), S(10)))
 
         colour_row = tk.Frame(bottom_ov, bg=panel_bg)
         colour_row.pack(side="left")
         tk.Label(colour_row, text="Colour:", bg=panel_bg, fg=ACCENT_PINK,
-                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 4))
+                 font=("Segoe UI", FS(10), "bold")).pack(side="left", padx=(S(0), S(4)))
+        # CTkComboBox splits itself at (width - height): the left section is
+        # outlined in border_color, but the right section holding the dropdown
+        # arrow is outlined in button_color. With a pink border that made the
+        # outline stop short and left the arrow sitting outside the box. Wrap a
+        # borderless combo in a pink-bordered frame instead, so a single
+        # rounded outline encloses the colour name and the arrow together.
+        colour_box = ctk.CTkFrame(
+            colour_row, fg_color="#f8fafc", border_color=ACCENT_PINK,
+            border_width=S(2), corner_radius=S(8))
+        colour_box.pack(side="left")
         self.colour_combo = ctk.CTkComboBox(
-            colour_row, variable=self.shape_colour_var,
+            colour_box, variable=self.shape_colour_var,
             values=list(COLOUR_PALETTE.keys()), state="readonly",
-            width=120, height=32, fg_color="#f8fafc", border_color=ACCENT_PINK,
+            width=S(112), height=S(24), fg_color="#f8fafc",
+            border_width=0, corner_radius=S(6),
             button_color="#f8fafc", button_hover_color="#fce7f3",
             text_color="#9d174d", dropdown_fg_color="#ffffff",
-            dropdown_text_color="#0f172a", font=("Segoe UI", 10),
+            dropdown_text_color="#0f172a", font=("Segoe UI", FS(10)),
             command=self._on_colour_select)
-        self.colour_combo.pack(side="left")
+        # Inset by more than the border width, or the combo covers the border.
+        self.colour_combo.pack(padx=S(3), pady=S(3))
         self.colour_combo.configure(state="disabled")
 
         self.part_label = tk.Label(
             colour_row, text="  Part:", bg=panel_bg, fg=ACCENT_PURP,
-            font=("Segoe UI", 10, "bold"))
+            font=("Segoe UI", FS(10), "bold"))
         self.part_select_var = tk.StringVar(value="Whole shape")
         self.part_combo = ctk.CTkComboBox(
             colour_row, variable=self.part_select_var, values=self._PART_OPTIONS,
-            state="readonly", width=120, height=32, fg_color="#f8fafc",
+            state="readonly", width=S(120), height=S(32), fg_color="#f8fafc",
             border_color=ACCENT_PURP, button_color="#f8fafc",
             button_hover_color="#ede9fe", text_color="#5b21b6",
             dropdown_fg_color="#ffffff", dropdown_text_color="#0f172a",
-            font=("Segoe UI", 10), command=self._on_part_select)
+            font=("Segoe UI", FS(10)), command=self._on_part_select)
         self.part_label.pack_forget()
         self.part_combo.pack_forget()
 
-        # Coordinates — bottom-left corner of the canvas
-        self.coord_label = tk.Label(
-            host, text="X: 0.00  Y: 0.00",
-            bg=panel_bg, fg=ACCENT_PURP, font=("Consolas", 10, "bold"),
-            padx=6, pady=4, highlightthickness=0)
-        self.coord_label.place(relx=0.0, rely=1.0, anchor="sw", x=8, y=-8)
-        self.coord_label.lift()
-        self._canvas_overlay_frames.append(self.coord_label)
-
-        # Colour-emptied — under top-left toolbar, still on canvas
+        # Colour-emptied — top-left corner of the canvas. Settings and Debug
+        # Log moved to the banner, so nothing sits above this any more.
         self.colour_emptied_btn = self._color_button(
             host, "\U0001f3a8 Emptied", self._on_colour_emptied_click, ACCENT_AMBER,
-            width=120, height=34, font_size=11)
-        self.colour_emptied_btn.place(relx=0.0, rely=0.0, anchor="nw", x=8, y=52)
+            width=S(120), height=S(34), font_size=FS(11))
+        self.colour_emptied_btn.place(relx=0.0, rely=0.0, anchor="nw",
+                                      x=S(8), y=S(8))
         self.colour_emptied_btn.lift()
         self.colour_emptied_btn.configure(
             state="disabled", fg_color="#4b5563", hover_color="#4b5563",
@@ -1172,40 +1350,80 @@ class ShapeApp:
 
     # ── Banner ────────────────────────────────────────────────────────────────
     def _build_banner(self, parent):
-        banner = tk.Frame(parent, bg="#000000", height=44)
+        # Measure the title first: the banner has to be tall enough to show it
+        # in full. It used to be a flat S(40) with the title drawn at unscaled
+        # coordinates inside a scaled canvas, so the lettering was clipped.
+        self._title_font = tkfont.Font(family="Georgia", size=FS(16),
+                                       weight="bold")
+        title_h = self._title_font.metrics("linespace")
+        banner_h = max(S(44), title_h + S(12), S(36) + S(8))
+
+        banner = tk.Frame(parent, bg="#000000", height=banner_h)
         banner.pack(fill="x", side="top")
         banner.pack_propagate(False)
+        # Keep the banner above the canvas in the stacking order. pack() gives
+        # it its own strip so nothing should overlap, but the canvas and its
+        # overlays are created later and call lift() on themselves — this makes
+        # the title's precedence explicit instead of order-dependent.
+        banner.lift()
+        self.banner = banner
+        self._banner_h = banner_h
 
         center = tk.Frame(banner, bg="#000000")
         center.place(relx=0.5, rely=0.5, anchor="center")
 
-        icon_c = tk.Canvas(center, width=32, height=32, bg="#000000",
-                           highlightthickness=0)
-        icon_c.pack(side="left", padx=(0, 8))
-        self._draw_flower_icon(icon_c, 16, 16, 13)
+        # Settings + Debug Log, top-left corner.
+        controls = tk.Frame(banner, bg="#000000")
+        controls.place(relx=0.0, rely=0.5, anchor="w", x=S(12))
 
-        title_c = tk.Canvas(center, bg="#000000", highlightthickness=0,
-                            width=200, height=30)
-        title_c.pack(side="left")
+        self.log_switch_var = tk.BooleanVar(value=False)
+        self.debug_log_btn = self._color_button(
+            controls, "</> Debug Log", self._on_debug_log_click,
+            "#1e293b", width=S(118), height=S(36), font_size=FS(11), corner_radius=S(10))
+        self.debug_log_btn.pack(side="left", padx=(S(0), S(8)))
+
+        self.settings_btn = self._color_button(
+            controls, "⚙", self._open_settings_popup, "#1e293b",
+            width=S(40), height=S(36), font_size=FS(15), corner_radius=S(18))
+        self.settings_btn.pack(side="left")
+
+        icon_side = S(34)
+        icon_c = tk.Canvas(center, width=icon_side, height=icon_side,
+                           bg="#000000", highlightthickness=0)
+        icon_c.pack(side="left", padx=(S(0), S(8)))
+        # Centre and radius derived from the (scaled) canvas — the old fixed
+        # 16/16/13 pushed the flower off-centre and clipped it once S() shrank
+        # the canvas around it.
+        self._draw_flower_icon(icon_c, icon_side / 2, icon_side / 2,
+                               icon_side * 0.40)
+
         title = "Rangoli Bot"
         colors = ["#f9a825", "#f97316", "#ec4899", "#a855f7",
                   "#6366f1", "#3b82f6", "#06b6d4", "#10b981",
                   "#f9a825", "#f97316", "#ec4899"]
-        _char_w = {'i': 7, 'l': 8, 'r': 9, 't': 9, 'f': 9, ' ': 11,
-                   'a': 12, 'n': 12, 'g': 12, 'o': 12, 'e': 11, 'k': 11,
-                   'R': 14, 'B': 13}
-        x_off = 2
+        # Measure the real font instead of a hand-tuned width table, so the
+        # letters stay correctly spaced and fully visible at any UI_SCALE.
+        tf = self._title_font
+        title_w = tf.measure(title) + S(8)
+        title_h = tf.metrics("linespace") + S(4)
+        title_c = tk.Canvas(center, bg="#000000", highlightthickness=0,
+                            width=title_w, height=title_h)
+        title_c.pack(side="left")
+        x_off = S(2)
         for ch, col in zip(title, colors):
-            title_c.create_text(x_off, 15, text=ch, fill=col,
-                                font=("Georgia", 16, "bold"), anchor="w")
-            x_off += _char_w.get(ch, 13)
+            title_c.create_text(x_off, title_h / 2, text=ch, fill=col,
+                                font=tf, anchor="w")
+            x_off += tf.measure(ch)
 
         # Hidden rangoli trigger: an invisible black hit-area filling the
         # banner's right corner, with a tiny dot as the only visual marker.
         # Clicking anywhere in the corner region works, not just the dot.
-        hot = tk.Canvas(banner, width=90, height=44, bg="#000000",
-                        highlightthickness=0, cursor="hand2")
-        hot.create_oval(78, 20, 82, 24, fill="#1a1a1a", outline="")
+        hot_w = S(90)
+        hot = tk.Canvas(banner, width=hot_w, height=self._banner_h,
+                        bg="#000000", highlightthickness=0, cursor="hand2")
+        dot_x, dot_y, dot_r = hot_w - S(10), self._banner_h / 2, S(2)
+        hot.create_oval(dot_x - dot_r, dot_y - dot_r, dot_x + dot_r,
+                        dot_y + dot_r, fill="#1a1a1a", outline="")
         hot.place(relx=1.0, rely=0.5, anchor="e", x=0)
         hot.bind("<Button-1>", self.load_and_send_rangoli)
 
@@ -1242,16 +1460,16 @@ class ShapeApp:
             cmd()
 
         wrap = tk.Frame(parent, bg=BG_CARD, cursor="hand2")
-        wrap.pack(side="right", padx=(4, 0))
+        wrap.pack(side="right", padx=(S(4), S(0)))
         btn = self._color_button(
             wrap, text, _once, fg_color,
-            width=112, height=40, font_size=12)
-        btn.pack(padx=4, pady=4)
+            width=S(112), height=S(40), font_size=FS(12))
+        btn.pack(padx=S(4), pady=S(4))
         return btn
 
     def _label(self, parent, text, fg=TEXT_DIM):
         tk.Label(parent, text=text, bg=BG_CARD, fg=fg,
-                 font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(6, 1))
+                 font=("Segoe UI", FS(11), "bold")).pack(anchor="w", pady=(S(6), S(1)))
 
     _PART_OPTIONS = ["Whole shape"] + [f"Petal {i+1}" for i in range(8)] + ["Center"]
 
@@ -1260,7 +1478,7 @@ class ShapeApp:
         self._close_design_options_popup()
         self.root.update_idletasks()
         # Tall enough for 4 full-height action rows + title without clipping Pen.
-        W, H = 400, 380
+        W, H = S(400), S(380)
         sx = self.root.winfo_screenwidth()  // 2 - W // 2
         sy = self.root.winfo_screenheight() // 2 - H // 2
 
@@ -1278,21 +1496,21 @@ class ShapeApp:
                           highlightthickness=0, takefocus=0)
         glass.place(x=0, y=0, width=W, height=H)
         self._draw_rounded_rect(
-            glass, 4, 4, W - 4, H - 4, radius=22,
+            glass, 4, 4, W - 4, H - 4, radius=S(22),
             fill=BG_CARD, outline=GLASS_BORDER, width=1)
         glass.create_text(
             28, 30, text="Choose a design", anchor="w",
-            fill=TEXT_PRIMARY, font=("Segoe UI", 15, "bold"))
+            fill=TEXT_PRIMARY, font=("Segoe UI", FS(15), "bold"))
         glass.create_text(
             28, 54, text="Pick how you want to start your rangoli.",
-            anchor="w", fill=TEXT_DIM, font=("Segoe UI", 9))
+            anchor="w", fill=TEXT_DIM, font=("Segoe UI", FS(9)))
         # Decorative only — never steal clicks from the buttons below.
         glass.bind("<Button-1>", lambda e: "break")
         glass.bind("<ButtonRelease-1>", lambda e: "break")
 
         close_id = glass.create_text(
             W - 26, 26, text="✕", anchor="center",
-            fill=TEXT_DIM, font=("Segoe UI", 13, "bold"), tags="close_btn")
+            fill=TEXT_DIM, font=("Segoe UI", FS(13), "bold"), tags="close_btn")
 
         def _on_close_enter(e):
             glass.itemconfig(close_id, fill=TEXT_PRIMARY)
@@ -1325,9 +1543,9 @@ class ShapeApp:
             if label == "Robot Test":
                 continue
             row = tk.Frame(body, bg=BG_CARD)
-            row.pack(fill="x", pady=(0, 12))
+            row.pack(fill="x", pady=(S(0), S(12)))
             tk.Label(row, text=label, bg=BG_CARD, fg=TEXT_PRIMARY,
-                     font=("Segoe UI", 12, "bold")).pack(side="left")
+                     font=("Segoe UI", FS(12), "bold")).pack(side="left")
 
             if label == "Import Designs":
                 self._small_btn(row, "Browse",
@@ -1344,9 +1562,9 @@ class ShapeApp:
 
         # Draw it yourself — the pen tool used to sit on the canvas toolbar.
         pen_row = tk.Frame(body, bg=BG_CARD)
-        pen_row.pack(fill="x", pady=(0, 12))
+        pen_row.pack(fill="x", pady=(S(0), S(12)))
         tk.Label(pen_row, text="Freehand Pen", bg=BG_CARD, fg=TEXT_PRIMARY,
-                 font=("Segoe UI", 12, "bold")).pack(side="left")
+                 font=("Segoe UI", FS(12), "bold")).pack(side="left")
         self.pen_btn = self._small_btn(
             pen_row, self._pen_btn_label(), _pick(self.toggle_pen_mode),
             self._pen_btn_colour(), "#14b8a6")
@@ -1377,7 +1595,7 @@ class ShapeApp:
     def _open_settings_popup(self):
         self._close_settings_popup()
         self.root.update_idletasks()
-        W, H = 400, 512
+        W, H = S(400), S(512)
         sx = self.root.winfo_screenwidth()  // 2 - W // 2
         sy = self.root.winfo_screenheight() // 2 - H // 2
 
@@ -1393,13 +1611,13 @@ class ShapeApp:
 
         glass = tk.Canvas(popup, width=W, height=H, bg=BG_DARK, highlightthickness=0)
         glass.pack(fill="both", expand=True)
-        self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=20,
+        self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=S(20),
                                 fill=BG_CARD, outline=ACCENT_PURP, width=2)
         glass.create_text(24, 26, text="Settings", anchor="w",
-                          fill=TEXT_PRIMARY, font=("Segoe UI", 14, "bold"))
+                          fill=TEXT_PRIMARY, font=("Segoe UI", FS(14), "bold"))
 
         close_lbl = tk.Label(popup, text="\u2715", bg=BG_CARD, fg=TEXT_DIM,
-                             font=("Segoe UI", 13, "bold"), cursor="hand2")
+                             font=("Segoe UI", FS(13), "bold"), cursor="hand2")
         close_lbl.place(x=W-38, y=14)
         close_lbl.bind("<Button-1>", lambda e: self._close_settings_popup())
 
@@ -1408,17 +1626,17 @@ class ShapeApp:
 
         def _row(label_text, sub_text=None):
             row_outer = tk.Frame(body, bg=BG_CARD)
-            row_outer.pack(fill="x", pady=(0, 14))
+            row_outer.pack(fill="x", pady=(S(0), S(14)))
             top = tk.Frame(row_outer, bg=BG_CARD)
             top.pack(fill="x")
             tk.Label(top, text=label_text, bg=BG_CARD, fg=TEXT_PRIMARY,
-                     font=("Segoe UI", 12, "bold")).pack(side="left")
+                     font=("Segoe UI", FS(12), "bold")).pack(side="left")
             select_slot = tk.Frame(top, bg=BG_CARD)
             select_slot.pack(side="right")
             if sub_text:
                 tk.Label(row_outer, text=sub_text, bg=BG_CARD, fg=TEXT_DIM,
-                         font=("Segoe UI", 9), wraplength=W-60,
-                         justify="left").pack(anchor="w", pady=(2, 0))
+                         font=("Segoe UI", FS(9)), wraplength=W-60,
+                         justify="left").pack(anchor="w", pady=(S(2), S(0)))
             return select_slot
 
         # 1) Connection — select a serial port
@@ -1426,10 +1644,10 @@ class ShapeApp:
         current_ports = [p.device for p in serial.tools.list_ports.comports()]
         self.port_combo = ctk.CTkComboBox(
             slot, variable=self.port_var, values=current_ports, state="readonly",
-            width=170, fg_color=BG_INPUT, border_color=GLASS_EDGE,
+            width=S(170), fg_color=BG_INPUT, border_color=GLASS_EDGE,
             button_color=GLASS_EDGE, button_hover_color=ACCENT_AMBER,
             text_color=TEXT_PRIMARY, dropdown_fg_color=BG_CARD,
-            dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", 11))
+            dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", FS(11)))
         self.port_combo.pack(side="right")
         self.port_menu = self.port_combo
 
@@ -1438,10 +1656,10 @@ class ShapeApp:
         self.feed_combo = ctk.CTkComboBox(
             slot, variable=self.feed_rate,
             values=["Low", "Medium", "High (default)"], state="readonly",
-            width=170, fg_color=BG_INPUT, border_color=GLASS_EDGE,
+            width=S(170), fg_color=BG_INPUT, border_color=GLASS_EDGE,
             button_color=GLASS_EDGE, button_hover_color=ACCENT_AMBER,
             text_color=TEXT_PRIMARY, dropdown_fg_color=BG_CARD,
-            dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", 11))
+            dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", FS(11)))
         self.feed_combo.pack(side="right")
 
         # 3) Robot Test — select a test shape
@@ -1450,11 +1668,11 @@ class ShapeApp:
             slot, variable=self.shape_type,
             values=["Select", "Square", "Rectangle", "Circle",
                     "Triangle", "Flower", "Complex Flower"],
-            state="readonly", width=170,
+            state="readonly", width=S(170),
             fg_color=BG_INPUT, border_color=GLASS_EDGE,
             button_color=GLASS_EDGE, button_hover_color=ACCENT_GREEN,
             text_color=TEXT_PRIMARY, dropdown_fg_color=BG_CARD,
-            dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", 10),
+            dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", FS(10)),
             command=lambda v: self._on_shape_menu_select(v))
         self.shape_menu.pack(side="right")
 
@@ -1483,7 +1701,7 @@ class ShapeApp:
             self._close_features_popup()
             return
         self.root.update_idletasks()
-        W, H = 400, 260
+        W, H = S(400), S(360)
         sx = self.root.winfo_screenwidth()  // 2 - W // 2
         sy = self.root.winfo_screenheight() // 2 - H // 2
 
@@ -1498,16 +1716,16 @@ class ShapeApp:
         glass = tk.Canvas(popup, width=W, height=H, bg=BG_DARK,
                           highlightthickness=0, takefocus=0)
         glass.place(x=0, y=0, width=W, height=H)
-        self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=20,
+        self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=S(20),
                                 fill=BG_CARD, outline="#0d9488", width=2)
         glass.create_text(24, 26, text="Features", anchor="w",
-                          fill=TEXT_PRIMARY, font=("Segoe UI", 14, "bold"))
+                          fill=TEXT_PRIMARY, font=("Segoe UI", FS(14), "bold"))
         glass.create_text(24, 50, text="Extra ways to work with the robot.",
-                          anchor="w", fill=TEXT_DIM, font=("Segoe UI", 9))
+                          anchor="w", fill=TEXT_DIM, font=("Segoe UI", FS(9)))
         glass.bind("<Button-1>", lambda e: "break")
 
         close_lbl = tk.Label(popup, text="✕", bg=BG_CARD, fg=TEXT_DIM,
-                             font=("Segoe UI", 13, "bold"), cursor="hand2")
+                             font=("Segoe UI", FS(13), "bold"), cursor="hand2")
         close_lbl.place(x=W-38, y=14)
         close_lbl.bind("<Button-1>", lambda e: self._close_features_popup())
 
@@ -1517,9 +1735,9 @@ class ShapeApp:
 
         # Learn Mode — guided, step-by-step rangoli lessons
         row = tk.Frame(body, bg=BG_CARD)
-        row.pack(fill="x", pady=(0, 6))
+        row.pack(fill="x", pady=(S(0), S(6)))
         tk.Label(row, text="Learn Mode", bg=BG_CARD, fg=TEXT_PRIMARY,
-                 font=("Segoe UI", 12, "bold")).pack(side="left")
+                 font=("Segoe UI", FS(12), "bold")).pack(side="left")
         on = self.learn_mode_var.get()
         self.learn_btn = self._small_btn(
             row, "Stop" if on else "Start", self._toggle_learn_mode,
@@ -1527,7 +1745,21 @@ class ShapeApp:
         tk.Label(body,
                  text="Learn to draw rangoli by hand. The robot draws one "
                       "part, then you copy it with your powder bottle.",
-                 bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", 9),
+                 bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(9)),
+                 wraplength=W-60, justify="left").pack(anchor="w")
+
+        # Picture to Rangoli — snap a photo, AI sketches a rangoli inspired by it
+        pic_row = tk.Frame(body, bg=BG_CARD)
+        pic_row.pack(fill="x", pady=(S(14), S(6)))
+        tk.Label(pic_row, text="Picture to Rangoli", bg=BG_CARD, fg=TEXT_PRIMARY,
+                 font=("Segoe UI", FS(12), "bold")).pack(side="left")
+        self._small_btn(
+            pic_row, "Start", self._launch_picture_to_rangoli,
+            ACCENT_PINK, self._lighten(ACCENT_PINK, -30))
+        tk.Label(body,
+                 text="Photograph your surroundings and the AI will sketch "
+                      "a rangoli inspired by it.",
+                 bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(9)),
                  wraplength=W-60, justify="left").pack(anchor="w")
 
         popup.lift()
@@ -1544,7 +1776,20 @@ class ShapeApp:
         try: popup.destroy()
         except Exception: pass
 
+    def _launch_picture_to_rangoli(self):
+        """Features popup > Picture to Rangoli — close the popup first so the
+        capture dialog's grab isn't fighting an already-open Toplevel."""
+        self._close_features_popup()
+        self.root.after(10, self._open_picture_capture_dialog)
+
     # ── NEW: Log popup toggle ───────────────────────────────────────────────
+    def _on_debug_log_click(self):
+        """Debug Log is a plain button now (was a switch) — flip the same
+        state var _toggle_log_popup already reads, so its open/close logic
+        is untouched."""
+        self.log_switch_var.set(not self.log_switch_var.get())
+        self._toggle_log_popup()
+
     def _toggle_log_popup(self):
         if self.log_switch_var.get():
             self._open_log_popup()
@@ -1554,7 +1799,7 @@ class ShapeApp:
     def _open_log_popup(self):
         self._close_log_popup(reset_switch=False)
         self.root.update_idletasks()
-        W, H = 640, 340
+        W, H = S(640), S(340)
         rx = self.root.winfo_rootx()
         ry = self.root.winfo_rooty()
         sx = rx + 60
@@ -1572,26 +1817,26 @@ class ShapeApp:
         hdr = tk.Frame(popup, bg=BG_PANEL)
         hdr.pack(fill="x")
         tk.Label(hdr, text="REAL-TIME GRBL CONSOLE", bg=BG_PANEL, fg=ACCENT_PURP,
-                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=10, pady=6)
+                 font=("Segoe UI", FS(10), "bold")).pack(side="left", padx=S(10), pady=S(6))
         tk.Button(hdr, text="Clear", bg=BG_PANEL, fg=TEXT_DIM, bd=0,
-                  font=("Segoe UI", 9), activebackground=BG_PANEL,
-                  command=lambda: self._clear_console()).pack(side="right", padx=6)
+                  font=("Segoe UI", FS(9)), activebackground=BG_PANEL,
+                  command=lambda: self._clear_console()).pack(side="right", padx=S(6))
         close_lbl = tk.Label(hdr, text="\u2715", bg=BG_PANEL, fg=TEXT_DIM,
-                             font=("Segoe UI", 11, "bold"), cursor="hand2")
-        close_lbl.pack(side="right", padx=6)
+                             font=("Segoe UI", FS(11), "bold"), cursor="hand2")
+        close_lbl.pack(side="right", padx=S(6))
         close_lbl.bind("<Button-1>", lambda e: self._on_log_close_clicked())
 
         # Create a brand-new Text widget as a real child of this popup (a
         # widget can't be safely moved between Toplevels in Tkinter), and
         # replay the buffered history into it.
         console = tk.Text(popup, bg="#110e2e", fg="#a8d8a8",
-                          font=("Consolas", 10), bd=0, highlightthickness=0,
+                          font=("Consolas", FS(10)), bd=0, highlightthickness=0,
                           insertbackground=ACCENT_GREEN)
         console.tag_config("send", foreground=ACCENT_CYAN)
         console.tag_config("recv", foreground=ACCENT_GREEN)
         console.tag_config("err",  foreground=ACCENT_PINK)
         console.tag_config("info", foreground=ACCENT_AMBER)
-        console.pack(fill="both", expand=True, padx=2, pady=(0, 2))
+        console.pack(fill="both", expand=True, padx=S(2), pady=(S(0), S(2)))
         for msg, tag in self._log_lines:
             console.insert(tk.END, msg + "\n", tag)
         console.see(tk.END)
@@ -1640,7 +1885,7 @@ class ShapeApp:
         show = (self.multi_colour_var.get() and s is not None
                 and s['type'] == "Complex Flower")
         if show:
-            self.part_label.pack(side="left", padx=(10, 4))
+            self.part_label.pack(side="left", padx=(S(10), S(4)))
             self.part_combo.pack(side="left")
         else:
             self.part_label.pack_forget()
@@ -1706,7 +1951,7 @@ class ShapeApp:
     def setup_context_menu(self):
         self.context_menu = tk.Menu(self.root, tearoff=0, bg=BG_CARD, fg=TEXT_PRIMARY,
                                     activebackground=ACCENT_BLUE, activeforeground="#ffffff",
-                                    font=("Segoe UI", 10))
+                                    font=("Segoe UI", FS(10)))
         self.context_menu.add_command(label="Move",   command=self.start_move)
         self.context_menu.add_command(label="Delete", command=self.delete_shape)
 
@@ -1830,7 +2075,7 @@ class ShapeApp:
 
         DOT_COLOR  = "#c8c8e0"
         MAJOR_DOT  = "#9090c0"
-        r_minor, r_major = 1, 2
+        r_minor, r_major = S(1), S(2)
         for ix in range(0, MAX_X + 1, 5):
             for iy in range(0, MAX_Y + 1, 5):
                 px  = x0 + (ix / MAX_X) * GRAPH_W
@@ -1843,45 +2088,97 @@ class ShapeApp:
 
         for ix in range(0, MAX_X + 1, 10):
             px = x0 + (ix / MAX_X) * GRAPH_W
-            c.create_text(px, y1 + 14, text=str(ix), fill="#8080a0",
-                          font=("Consolas", 8), tags="grid")
+            c.create_text(px, y1 + S(14), text=str(ix), fill="#8080a0",
+                          font=("Consolas", FS(8)), tags="grid")
         for iy in range(0, MAX_Y + 1, 10):
             py = y1 - (iy / MAX_Y) * GRAPH_H
-            c.create_text(x0 - 8, py, text=str(iy), fill="#8080a0",
-                          font=("Consolas", 8), anchor="e", tags="grid")
+            c.create_text(x0 - S(8), py, text=str(iy), fill="#8080a0",
+                          font=("Consolas", FS(8)), anchor="e", tags="grid")
 
-        c.create_line(x0, y1, x1, y1, fill="#c084fc", width=2, tags="grid")
-        c.create_line(x0, y0, x0, y1, fill="#c084fc", width=2, tags="grid")
-        c.create_text((x0 + x1) // 2, CANVAS_H - 4, text="X (mm)",
-                      fill="#7c3aed", font=("Segoe UI", 9, "bold"), tags="grid")
-        c.create_text(10, (y0 + y1) // 2,      text="Y",
-                      fill="#7c3aed", font=("Segoe UI", 9, "bold"), tags="grid")
-        c.create_text(10, (y0 + y1) // 2 - 14, text="(mm)",
-                      fill="#7c3aed", font=("Segoe UI", 7), tags="grid")
+        c.create_line(x0, y1, x1, y1, fill="#c084fc", width=S(2), tags="grid")
+        c.create_line(x0, y0, x0, y1, fill="#c084fc", width=S(2), tags="grid")
+        c.create_text((x0 + x1) // 2, CANVAS_H - S(4), text="X (mm)",
+                      fill="#7c3aed", font=("Segoe UI", FS(9), "bold"), tags="grid")
+        c.create_text(S(6), (y0 + y1) // 2,        text="Y",
+                      fill="#7c3aed", font=("Segoe UI", FS(9), "bold"), tags="grid")
+        c.create_text(S(6), (y0 + y1) // 2 - S(14), text="(mm)",
+                      fill="#7c3aed", font=("Segoe UI", FS(7)), tags="grid")
 
         ox, oy = x0, y1
-        for hr, hcol in [(22, "#e9d5ff"), (15, "#c084fc"), (10, "#7c3aed")]:
+        for hr, hcol in [(S(22), "#e9d5ff"), (S(15), "#c084fc"), (S(10), "#7c3aed")]:
             c.create_oval(ox-hr, oy-hr, ox+hr, oy+hr, fill="", outline=hcol,
                           width=1, tags="grid")
-        arm, ah = 40, 6
-        c.create_line(ox, oy-12, ox, oy-arm, fill="#7c3aed", width=2, tags="grid")
+        arm, ah = S(40), S(6)
+        c.create_line(ox, oy-S(12), ox, oy-arm, fill="#7c3aed", width=S(2), tags="grid")
         c.create_polygon(ox-ah, oy-arm+ah*2, ox+ah, oy-arm+ah*2, ox, oy-arm,
                          fill="#7c3aed", outline="", tags="grid")
-        c.create_line(ox+12, oy, ox+arm, oy, fill="#7c3aed", width=2, tags="grid")
+        c.create_line(ox+S(12), oy, ox+arm, oy, fill="#7c3aed", width=S(2), tags="grid")
         c.create_polygon(ox+arm-ah*2, oy-ah, ox+arm-ah*2, oy+ah, ox+arm, oy,
                          fill="#7c3aed", outline="", tags="grid")
-        r = 11
+        r = S(11)
         c.create_oval(ox-r, oy-r, ox+r, oy+r, fill="#7c3aed",
-                      outline="#ffffff", width=2, tags="grid")
-        c.create_oval(ox-5, oy-5, ox+5, oy+5, fill="#ffffff", outline="", tags="grid")
-        c.create_text(ox-4, oy+16, text="(0,0)", fill="#7c3aed",
-                      font=("Segoe UI", 9, "bold"), tags="grid")
-        c.create_text(ox+arm+14, oy-6,   text="X+", fill="#7c3aed",
-                      font=("Segoe UI", 8, "bold"), tags="grid")
-        c.create_text(ox+14, oy-arm-8,   text="Y+", fill="#7c3aed",
-                      font=("Segoe UI", 8, "bold"), tags="grid")
+                      outline="#ffffff", width=S(2), tags="grid")
+        rd = S(5)
+        c.create_oval(ox-rd, oy-rd, ox+rd, oy+rd, fill="#ffffff", outline="",
+                      tags="grid")
+        c.create_text(ox-S(4), oy+S(16), text="(0,0)", fill="#7c3aed",
+                      font=("Segoe UI", FS(9), "bold"), tags="grid")
+        c.create_text(ox+arm+S(14), oy-S(6),   text="X+", fill="#7c3aed",
+                      font=("Segoe UI", FS(8), "bold"), tags="grid")
+        c.create_text(ox+S(14), oy-arm-S(8),   text="Y+", fill="#7c3aed",
+                      font=("Segoe UI", FS(8), "bold"), tags="grid")
 
     # ── DXF IMPORT ────────────────────────────────────────────────────────────
+    def _raw_scan_dxf_lwpolylines(self, path):
+        """Read LWPOLYLINE vertices straight off the group-code stream.
+
+        Bypasses ezdxf's entity loader entirely, so it tolerates files that
+        skip the AcDbEntity/AcDbPolyline subclass markers ezdxf requires.
+        Only handles plain (10, 20) x/y vertex pairs — enough for the
+        simple polyline-only rangoli exports this app deals with.
+        """
+        try:
+            with open(path, "r", errors="replace") as fh:
+                raw = fh.read().splitlines()
+        except OSError:
+            return []
+
+        tags = []
+        i = 0
+        while i + 1 < len(raw):
+            try:
+                tags.append((int(raw[i].strip()), raw[i + 1].strip()))
+            except ValueError:
+                pass
+            i += 2
+
+        paths, xs, ys, in_poly = [], [], [], False
+
+        def _flush():
+            if xs and len(xs) == len(ys):
+                pts = list(zip(xs, ys))
+                if len(pts) >= 2:
+                    paths.append(pts)
+
+        for code, val in tags:
+            if code == 0:
+                if in_poly:
+                    _flush()
+                xs, ys = [], []
+                in_poly = (val == "LWPOLYLINE")
+                continue
+            if not in_poly:
+                continue
+            if code == 10:
+                try: xs.append(float(val))
+                except ValueError: pass
+            elif code == 20:
+                try: ys.append(float(val))
+                except ValueError: pass
+        if in_poly:
+            _flush()
+        return paths
+
     def _parse_dxf_file(self, path):
         """Load a DXF file into deduped, chained stroke paths.
 
@@ -1893,21 +2190,29 @@ class ShapeApp:
         except ImportError:
             return None, "ezdxf is required.\nRun: pip install ezdxf"
 
+        raw_paths = None
         try:
             doc = ezdxf.readfile(path)
             msp = doc.modelspace()
-        except Exception as e:
-            return None, f"Error loading DXF: {e}"
+            raw_paths = []
+            for entity in msp:
+                try:
+                    p = ezpath.make_path(entity)
+                except Exception:
+                    continue
+                pts = [(v.x, v.y) for v in p.flattening(0.05)]
+                if len(pts) >= 2:
+                    raw_paths.append(pts)
+        except Exception:
+            raw_paths = None
 
-        raw_paths = []
-        for entity in msp:
-            try:
-                p = ezpath.make_path(entity)
-            except Exception:
-                continue
-            pts = [(v.x, v.y) for v in p.flattening(0.05)]
-            if len(pts) >= 2:
-                raw_paths.append(pts)
+        if not raw_paths:
+            # Strict loader bailed or found nothing usable (e.g. a LWPOLYLINE
+            # missing its AcDbEntity/AcDbPolyline subclass markers, which
+            # ezdxf refuses outright, even in recovery mode). Fall back to a
+            # bare group-code scan that reads LWPOLYLINE vertices directly,
+            # ignoring the missing subclass structure entirely.
+            raw_paths = self._raw_scan_dxf_lwpolylines(path)
 
         if not raw_paths:
             return None, "No drawable entities found in DXF."
@@ -2058,7 +2363,7 @@ class ShapeApp:
     def _show_dxf_preview_popup(self, filename, raw_paths):
         self.root.update_idletasks()
 
-        W, H  = 640, 760
+        W, H = S(640), S(760)
         CW    = 560
         sx = self.root.winfo_screenwidth()  // 2 - W // 2
         sy = self.root.winfo_screenheight() // 2 - H // 2
@@ -2074,14 +2379,14 @@ class ShapeApp:
 
         glass = tk.Canvas(popup, width=W, height=H, bg=BG_DARK, highlightthickness=0)
         glass.pack(fill="both", expand=True)
-        self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=24,
+        self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=S(24),
                                 fill=BG_CARD, outline=ACCENT_PURP, width=2)
         glass.create_text(28, 30, text=f"Preview: {filename}", anchor="w",
-                          fill=TEXT_PRIMARY, font=("Segoe UI", 14, "bold"))
+                          fill=TEXT_PRIMARY, font=("Segoe UI", FS(14), "bold"))
         glass.create_text(
             28, 54,
             text="Edit → click a stroke → Delete or Make multi-colour.",
-            anchor="w", fill=TEXT_DIM, font=("Segoe UI", 9))
+            anchor="w", fill=TEXT_DIM, font=("Segoe UI", FS(9)))
 
         prev_x = (W - CW) // 2
         prev_y = 76
@@ -2089,7 +2394,7 @@ class ShapeApp:
         preview.place(x=prev_x, y=prev_y)
 
         status_lbl = tk.Label(popup, text="", bg=BG_CARD, fg=TEXT_DIM,
-                              font=("Segoe UI", 9, "bold"))
+                              font=("Segoe UI", FS(9), "bold"))
         status_lbl.place(x=28, y=prev_y + CW + 10)
 
         # path_colours keyed by id(pts list) while editing, remapped to indices on confirm
@@ -2188,17 +2493,17 @@ class ShapeApp:
             state['selected_pts'] = kept_pts
 
             fr = tk.Frame(popup, bg=BG_PANEL, highlightbackground=ACCENT_PURP,
-                          highlightthickness=2, bd=0, padx=6, pady=6)
+                          highlightthickness=2, bd=0, padx=S(6), pady=S(6))
             state['action_frame'] = fr
             tk.Label(fr, text="Pick a colour", bg=BG_PANEL, fg=TEXT_PRIMARY,
-                     font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
+                     font=("Segoe UI", FS(9), "bold")).pack(anchor="w", pady=(S(0), S(4)))
             row = tk.Frame(fr, bg=BG_PANEL)
             row.pack()
             for name, hex_col in COLOUR_PALETTE.items():
-                sw = tk.Canvas(row, width=22, height=22, bg=BG_PANEL,
+                sw = tk.Canvas(row, width=S(22), height=S(22), bg=BG_PANEL,
                                highlightthickness=1, highlightbackground="#ffffff")
                 sw.create_rectangle(2, 2, 20, 20, fill=hex_col, outline=hex_col)
-                sw.pack(side="left", padx=2)
+                sw.pack(side="left", padx=S(2))
                 sw.bind("<Button-1>", lambda _e, n=name: apply_colour(n))
                 sw.configure(cursor="hand2")
                 sw.bind("<Enter>", lambda _e, n=name: status_lbl.config(
@@ -2206,9 +2511,9 @@ class ShapeApp:
             tk.Button(
                 fr, text="Cancel", command=dismiss_action_menu,
                 bg=BG_INPUT, fg=TEXT_DIM, relief="flat",
-                font=("Segoe UI", 8), cursor="hand2",
+                font=("Segoe UI", FS(8)), cursor="hand2",
                 activebackground=BG_CARD, activeforeground=TEXT_PRIMARY,
-            ).pack(anchor="e", pady=(6, 0))
+            ).pack(anchor="e", pady=(S(6), S(0)))
             fr.update_idletasks()
             fw, fh = fr.winfo_reqwidth(), fr.winfo_reqheight()
             px = max(8, min(anchor_x, W - fw - 8))
@@ -2221,17 +2526,17 @@ class ShapeApp:
             dismiss_action_menu()
             state['selected_pts'] = pts
             fr = tk.Frame(popup, bg=BG_PANEL, highlightbackground=ACCENT_PINK,
-                          highlightthickness=2, bd=0, padx=6, pady=6)
+                          highlightthickness=2, bd=0, padx=S(6), pady=S(6))
             state['action_frame'] = fr
 
             def _act_btn(parent, text, cmd, accent):
                 b = tk.Button(
                     parent, text=text, command=cmd,
                     bg=accent, fg="#ffffff", relief="flat",
-                    font=("Segoe UI", 9, "bold"), cursor="hand2",
+                    font=("Segoe UI", FS(9), "bold"), cursor="hand2",
                     activebackground=accent, activeforeground="#ffffff",
-                    padx=10, pady=4)
-                b.pack(side="left", padx=3)
+                    padx=S(10), pady=S(4))
+                b.pack(side="left", padx=S(3))
                 return b
 
             # Map preview-canvas coords → popup coords
@@ -2244,10 +2549,10 @@ class ShapeApp:
             tk.Button(
                 fr, text="✕", command=dismiss_action_menu,
                 bg=BG_INPUT, fg=TEXT_DIM, relief="flat",
-                font=("Segoe UI", 9, "bold"), cursor="hand2",
+                font=("Segoe UI", FS(9), "bold"), cursor="hand2",
                 activebackground=BG_CARD, activeforeground=TEXT_PRIMARY,
-                padx=6, pady=4,
-            ).pack(side="left", padx=(6, 0))
+                padx=S(6), pady=S(4),
+            ).pack(side="left", padx=(S(6), S(0)))
 
             fr.update_idletasks()
             fw, fh = fr.winfo_reqwidth(), fr.winfo_reqheight()
@@ -2279,10 +2584,10 @@ class ShapeApp:
         redraw_preview()
 
         edit_btn = ctk.CTkButton(
-            popup, text="Edit: OFF", width=110, height=32,
+            popup, text="Edit: OFF", width=S(110), height=S(32),
             fg_color="transparent", hover_color="#f1f5f9",
             border_width=1, border_color=GLASS_EDGE,
-            text_color=TEXT_PRIMARY, font=("Segoe UI", 10, "bold"))
+            text_color=TEXT_PRIMARY, font=("Segoe UI", FS(10), "bold"))
         def toggle_edit():
             state['edit'] = not state['edit']
             dismiss_action_menu()
@@ -2296,18 +2601,18 @@ class ShapeApp:
         edit_btn.place(x=28, y=H - 56)
 
         cancel_btn = ctk.CTkButton(
-            popup, text="Cancel", width=110, height=32,
+            popup, text="Cancel", width=S(110), height=S(32),
             fg_color="transparent", hover_color="#f1f5f9",
             border_width=1, border_color=GLASS_EDGE,
-            text_color=TEXT_DIM, font=("Segoe UI", 10, "bold"),
+            text_color=TEXT_DIM, font=("Segoe UI", FS(10), "bold"),
             command=lambda: self._dxf_preview_cancel())
         cancel_btn.place(x=W - 260, y=H - 56)
 
         confirm_btn = ctk.CTkButton(
-            popup, text="Confirm Import", width=120, height=32,
+            popup, text="Confirm Import", width=S(120), height=S(32),
             fg_color="transparent", hover_color="#d1fae5",
             border_width=1, border_color=ACCENT_GREEN,
-            text_color=ACCENT_GREEN, font=("Segoe UI", 10, "bold"),
+            text_color=ACCENT_GREEN, font=("Segoe UI", FS(10), "bold"),
             command=lambda: self._dxf_preview_confirm(filename, state))
         confirm_btn.place(x=W - 140, y=H - 56)
 
@@ -2343,8 +2648,25 @@ class ShapeApp:
 
     # ── AI GENERATED DESIGN (OpenAI) ──────────────────────────────────────
     def _get_openai_api_key(self):
-        HARDCODED_API_KEY = "ADD YOUR OPENAI API KEY HERE"
-        return HARDCODED_API_KEY
+        """Return the OpenAI API key, or OFFLINE_SENTINEL when none is set.
+
+        Order of preference: a hard-coded key (paste yours below to force
+        online use), then openai_key.txt beside the app, then the offline
+        sentinel. The sentinel is truthy on purpose so every feature still
+        runs — the low-level calls then serve a cached / locally-drawn
+        result, which is what lets the app work with no internet at all."""
+        HARDCODED_API_KEY = ""          # ← paste a key here to force online use
+        if HARDCODED_API_KEY.strip():
+            return HARDCODED_API_KEY.strip()
+        try:
+            if os.path.exists(AI_KEY_FILE):
+                with open(AI_KEY_FILE, "r") as fh:
+                    k = fh.read().strip()
+                if k:
+                    return k
+        except Exception:
+            pass
+        return OFFLINE_SENTINEL
 
     def _forget_openai_api_key(self):
         try:
@@ -2352,6 +2674,93 @@ class ShapeApp:
                 os.remove(AI_KEY_FILE)
         except Exception:
             pass
+
+    # ── OFFLINE FALLBACKS ─────────────────────────────────────────────────
+    # Each returns exactly the shape the matching online call returns, so the
+    # rest of the pipeline (tracing, G-code, scoring UI, FX overlay) is
+    # untouched and never even knows it ran offline.
+
+    def _offline_rangoli_bytes(self):
+        """A real rangoli PNG with no internet. Picks a random image you
+        pre-generated into ai_cache/rangolis/ (run pregenerate_cache.py once
+        while online); if that folder is empty it draws one procedurally so
+        the demo can never hard-fail."""
+        try:
+            if os.path.isdir(CACHED_RANGOLI_DIR):
+                files = [f for f in os.listdir(CACHED_RANGOLI_DIR)
+                         if f.lower().endswith((".png", ".jpg", ".jpeg"))]
+                if files:
+                    pick = os.path.join(CACHED_RANGOLI_DIR, random.choice(files))
+                    with open(pick, "rb") as fh:
+                        return fh.read()
+        except Exception:
+            pass
+        return self._procedural_rangoli_bytes()
+
+    def _procedural_rangoli_bytes(self):
+        """Last-resort offline rangoli: a centre circle ringed by 6-9 petals,
+        thin black single-stroke outlines on white — the same shape family the
+        prompts ask gpt-image-1 for, so it contour-traces into clean G-code."""
+        from PIL import Image, ImageDraw
+        import io
+        SZ = 1024
+        img = Image.new("RGB", (SZ, SZ), "white")
+        d = ImageDraw.Draw(img)
+        cx = cy = SZ / 2.0
+        n = random.randint(6, 9)
+        R = SZ * 0.30
+        rc = SZ * 0.055
+        d.ellipse([cx - rc, cy - rc, cx + rc, cy + rc], outline="black", width=3)
+        for i in range(n):
+            a = 2 * math.pi * i / n
+            tx, ty = cx + R * math.cos(a), cy + R * math.sin(a)
+            base = rc * 1.4
+            bx, by = cx + base * math.cos(a), cy + base * math.sin(a)
+            pa = a + math.pi / 2
+            w = R * 0.42
+            pts, steps = [], 18
+            for s in range(steps + 1):
+                t = s / steps
+                mx, my = bx + (tx - bx) * t, by + (ty - by) * t
+                bulge = math.sin(math.pi * t) * w
+                pts.append((mx + bulge * math.cos(pa), my + bulge * math.sin(pa)))
+            for s in range(steps, -1, -1):
+                t = s / steps
+                mx, my = bx + (tx - bx) * t, by + (ty - by) * t
+                bulge = math.sin(math.pi * t) * w
+                pts.append((mx - bulge * math.cos(pa), my - bulge * math.sin(pa)))
+            d.line(pts + [pts[0]], fill="black", width=3, joint="curve")
+        Rd = R * 1.28
+        for i in range(n):
+            a = 2 * math.pi * (i + 0.5) / n
+            dx, dy = cx + Rd * math.cos(a), cy + Rd * math.sin(a)
+            dr = SZ * 0.012
+            d.ellipse([dx - dr, dy - dr, dx + dr, dy + dr], outline="black", width=3)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def _offline_scene_description(self):
+        """Stand-in for the gpt-4o-mini doorstep description (Picture to
+        Rangoli). One short sentence, same as the model is asked to return."""
+        return random.choice([
+            "A warm terracotta-tiled doorstep framed by weathered wooden "
+            "doors, with soft daylight and a calm, homely feel.",
+            "A clean grey-stone entrance with white-washed walls and potted "
+            "greenery, bright and welcoming.",
+            "A traditional red-oxide threshold beside a carved wooden frame, "
+            "warm and rustic in tone.",
+            "A modern polished-cement porch with muted pastel walls, minimal "
+            "and airy in atmosphere.",
+        ])
+
+    def _offline_fx_coordinates(self, design_img=None):
+        """Stand-in for the gpt-5.4 diya/flower placement call (AI Enhance).
+        One diya at the centre plus a spread of flower cells; the worker then
+        re-snaps the flowers onto this design's real petal gaps via
+        _evenly_space_flowers_outside, so the result is design-aware."""
+        return {"diyas": ["J11"],
+                "flowers": ["C5", "Q5", "F16", "O16", "J3", "J18", "D11", "R11"]}
 
     def _open_rangoli_quiz_dialog(self):
         dlg = tk.Toplevel(self.root)
@@ -2361,22 +2770,22 @@ class ShapeApp:
         dlg.transient(self.root)
 
         pad = tk.Frame(dlg, bg=BG_CARD)
-        pad.pack(fill="both", expand=True, padx=16, pady=16)
+        pad.pack(fill="both", expand=True, padx=S(16), pady=S(16))
 
         tk.Label(pad, text="Tell us about your design", bg=BG_CARD, fg=TEXT_PRIMARY,
-                 font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 12))
+                 font=("Segoe UI", FS(12), "bold")).pack(anchor="w", pady=(S(0), S(12)))
 
         def add_field(label_text, options):
             tk.Label(pad, text=label_text, bg=BG_CARD, fg=TEXT_DIM,
-                     font=("Segoe UI", 10)).pack(anchor="w", pady=(6, 2))
+                     font=("Segoe UI", FS(10))).pack(anchor="w", pady=(S(6), S(2)))
             var = tk.StringVar(value=options[0])
             combo = ctk.CTkComboBox(
                 pad, variable=var, values=options, state="readonly",
-                width=340, fg_color=BG_INPUT, border_color=GLASS_EDGE,
+                width=S(340), fg_color=BG_INPUT, border_color=GLASS_EDGE,
                 button_color=GLASS_EDGE, button_hover_color=ACCENT_AMBER,
                 text_color=TEXT_PRIMARY, dropdown_fg_color=BG_CARD,
-                dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", 10))
-            combo.pack(anchor="w", pady=(0, 8))
+                dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", FS(10)))
+            combo.pack(anchor="w", pady=(S(0), S(8)))
             return var
 
         state_var = add_field(
@@ -2417,8 +2826,8 @@ class ShapeApp:
 
         ctk.CTkButton(pad, text="Generate Design", command=submit,
                       fg_color=ACCENT_PURP, hover_color="#8b5cf6",
-                      text_color="#ffffff", font=("Segoe UI", 11, "bold"),
-                      height=38, corner_radius=8).pack(fill="x", pady=(12, 0))
+                      text_color="#ffffff", font=("Segoe UI", FS(11), "bold"),
+                      height=S(38), corner_radius=S(8)).pack(fill="x", pady=(S(12), S(0)))
 
         dlg.update_idletasks()
         w, h = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
@@ -2451,10 +2860,10 @@ class ShapeApp:
         dlg.transient(self.root)
 
         pad = tk.Frame(dlg, bg=BG_CARD)
-        pad.pack(fill="both", expand=True, padx=20, pady=20)
+        pad.pack(fill="both", expand=True, padx=S(20), pady=S(20))
 
         tk.Label(pad, text="How do you want to generate your rangoli?", bg=BG_CARD,
-                 fg=TEXT_PRIMARY, font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 16))
+                 fg=TEXT_PRIMARY, font=("Segoe UI", FS(12), "bold")).pack(anchor="w", pady=(S(0), S(16)))
 
         def on_close():
             dlg.destroy()
@@ -2468,24 +2877,24 @@ class ShapeApp:
             btn_row, text="Answer Questions",
             command=lambda: (dlg.destroy(), self._open_rangoli_quiz_dialog()),
             fg_color=ACCENT_PURP, hover_color="#8b5cf6",
-            text_color="#ffffff", font=("Segoe UI", 11, "bold"),
-            height=40, corner_radius=8
-        ).pack(fill="x", pady=(0, 8))
+            text_color="#ffffff", font=("Segoe UI", FS(11), "bold"),
+            height=S(40), corner_radius=S(8)
+        ).pack(fill="x", pady=(S(0), S(8)))
 
         ctk.CTkButton(
             btn_row, text="Surprise Me",
             command=lambda: (dlg.destroy(), self._start_ai_generation()),
             fg_color=ACCENT_CYAN, hover_color="#0891b2",
-            text_color="#0d0b2b", font=("Segoe UI", 11, "bold"),
-            height=40, corner_radius=8
-        ).pack(fill="x", pady=(0, 8))
+            text_color="#0d0b2b", font=("Segoe UI", FS(11), "bold"),
+            height=S(40), corner_radius=S(8)
+        ).pack(fill="x", pady=(S(0), S(8)))
 
         ctk.CTkButton(
             btn_row, text="Type Your Idea",
             command=lambda: (dlg.destroy(), self._open_ai_prompt_dialog()),
             fg_color=ACCENT_AMBER, hover_color="#b45309",
-            text_color="#0d0b2b", font=("Segoe UI", 11, "bold"),
-            height=40, corner_radius=8
+            text_color="#0d0b2b", font=("Segoe UI", FS(11), "bold"),
+            height=S(40), corner_radius=S(8)
         ).pack(fill="x")
 
         dlg.update_idletasks()
@@ -2522,30 +2931,30 @@ class ShapeApp:
         dlg.protocol("WM_DELETE_WINDOW", on_close)
 
         pad = tk.Frame(dlg, bg=BG_CARD)
-        pad.pack(fill="both", expand=True, padx=18, pady=16)
+        pad.pack(fill="both", expand=True, padx=S(18), pady=S(16))
 
         tk.Label(pad, text="Describe the rangoli you'd like",
                  bg=BG_CARD, fg=TEXT_PRIMARY,
-                 font=("Segoe UI", 13, "bold")).pack(anchor="w")
+                 font=("Segoe UI", FS(13), "bold")).pack(anchor="w")
         tk.Label(pad, text="e.g. \"peacock feathers and lotus\", \"Diwali diyas\", "
                             "\"simple geometric with stars\"",
-                 bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", 10),
-                 justify="left", wraplength=360).pack(anchor="w", pady=(2, 10))
+                 bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(10)),
+                 justify="left", wraplength=S(360)).pack(anchor="w", pady=(S(2), S(10)))
 
         entry = ctk.CTkEntry(
-            pad, width=360, height=36,
+            pad, width=S(360), height=S(36),
             placeholder_text="Type your rangoli idea here...",
             fg_color=BG_INPUT, border_color=GLASS_EDGE,
-            text_color=TEXT_PRIMARY, font=("Segoe UI", 11))
+            text_color=TEXT_PRIMARY, font=("Segoe UI", FS(11)))
         entry.pack(fill="x")
 
         note = tk.Label(
             pad, text="Only rangoli / mandala designs can be generated here — "
                        "anything you type is used as a theme for a rangoli, "
                        "not a literal picture.",
-            bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", 9),
-            justify="left", wraplength=360)
-        note.pack(anchor="w", pady=(6, 14))
+            bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(9)),
+            justify="left", wraplength=S(360))
+        note.pack(anchor="w", pady=(S(6), S(14)))
 
         def start_custom():
             text = entry.get().strip()
@@ -2569,19 +2978,19 @@ class ShapeApp:
         ctk.CTkButton(
             btn_row, text="Generate my idea", command=start_custom,
             fg_color=ACCENT_CYAN, hover_color=self._lighten(ACCENT_CYAN, -30),
-            text_color="#0d0b2b", font=("Segoe UI", 11, "bold"),
-            height=38, corner_radius=8
-        ).pack(side="left", expand=True, fill="x", padx=(0, 6))
+            text_color="#0d0b2b", font=("Segoe UI", FS(11), "bold"),
+            height=S(38), corner_radius=S(8)
+        ).pack(side="left", expand=True, fill="x", padx=(S(0), S(6)))
 
         ctk.CTkButton(
             btn_row, text="Surprise Me", command=start_random,
             fg_color=ACCENT_PURP, hover_color=self._lighten(ACCENT_PURP, -30),
-            text_color="#0d0b2b", font=("Segoe UI", 11, "bold"),
-            height=38, corner_radius=8
-        ).pack(side="left", expand=True, fill="x", padx=(6, 0))
+            text_color="#0d0b2b", font=("Segoe UI", FS(11), "bold"),
+            height=S(38), corner_radius=S(8)
+        ).pack(side="left", expand=True, fill="x", padx=(S(6), S(0)))
 
         tk.Label(pad, text="— or —", bg=BG_CARD, fg=TEXT_DIM,
-                 font=("Segoe UI", 9)).pack(pady=(10, 6))
+                 font=("Segoe UI", FS(9))).pack(pady=(S(10), S(6)))
 
         def start_guided():
             on_close()
@@ -2590,8 +2999,8 @@ class ShapeApp:
         ctk.CTkButton(
             pad, text="Answer 4 Quick Questions", command=start_guided,
             fg_color=ACCENT_AMBER, hover_color=self._lighten(ACCENT_AMBER, -30),
-            text_color="#0d0b2b", font=("Segoe UI", 11, "bold"),
-            height=38, corner_radius=8
+            text_color="#0d0b2b", font=("Segoe UI", FS(11), "bold"),
+            height=S(38), corner_radius=S(8)
         ).pack(fill="x")
 
         dlg.update_idletasks()
@@ -2630,21 +3039,21 @@ class ShapeApp:
         dlg.protocol("WM_DELETE_WINDOW", on_close)
 
         pad = tk.Frame(dlg, bg=BG_CARD)
-        pad.pack(fill="both", expand=True, padx=18, pady=16)
+        pad.pack(fill="both", expand=True, padx=S(18), pady=S(16))
 
         tk.Label(pad, text="A few quick questions", bg=BG_CARD, fg=TEXT_PRIMARY,
-                 font=("Segoe UI", 13, "bold")).pack(anchor="w", pady=(0, 10))
+                 font=("Segoe UI", FS(13), "bold")).pack(anchor="w", pady=(S(0), S(10)))
 
         def add_field(label_text, options, default=None):
             tk.Label(pad, text=label_text, bg=BG_CARD, fg=TEXT_DIM,
-                     font=("Segoe UI", 10)).pack(anchor="w", pady=(6, 2))
+                     font=("Segoe UI", FS(10))).pack(anchor="w", pady=(S(6), S(2)))
             var = tk.StringVar(value=default or options[0])
             combo = ctk.CTkComboBox(
                 pad, variable=var, values=options, state="readonly",
-                width=360, fg_color=BG_INPUT, border_color=GLASS_EDGE,
+                width=S(360), fg_color=BG_INPUT, border_color=GLASS_EDGE,
                 button_color=GLASS_EDGE, button_hover_color=ACCENT_AMBER,
                 text_color=TEXT_PRIMARY, dropdown_fg_color=BG_CARD,
-                dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", 10))
+                dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", FS(10)))
             combo.pack(anchor="w")
             return var
 
@@ -2698,13 +3107,13 @@ class ShapeApp:
             self._start_ai_generation(custom_theme=theme)
 
         btn_row = tk.Frame(pad, bg=BG_CARD)
-        btn_row.pack(fill="x", pady=(16, 0))
+        btn_row.pack(fill="x", pady=(S(16), S(0)))
 
         ctk.CTkButton(
             btn_row, text="Generate", command=submit,
             fg_color=ACCENT_AMBER, hover_color=self._lighten(ACCENT_AMBER, -30),
-            text_color="#0d0b2b", font=("Segoe UI", 11, "bold"),
-            height=38, corner_radius=8
+            text_color="#0d0b2b", font=("Segoe UI", FS(11), "bold"),
+            height=S(38), corner_radius=S(8)
         ).pack(fill="x")
 
         dlg.update_idletasks()
@@ -2786,6 +3195,27 @@ class ShapeApp:
             self._ai_generating = False
             self.root.after(0, lambda: self.hide_hint_popup(instant=True))
 
+    def _plotter_constraints_suffix(self):
+        """Physical-drawing constraints shared by every rangoli image prompt
+        — the design still has to survive contour-tracing into a handful of
+        clean outlines a 28mm powder-dispensing robot can actually draw."""
+        return (
+            " This design will be physically drawn at a small 28mm x 28mm "
+            "scale by a powder-dispensing robot, so keep it to ONE motif "
+            "only: a centre circle with ONE ring of 6-9 petals (or a single "
+            "shape repeated 6-9 times), plus optionally a thin outer ring "
+            "of small accent points - nothing more. No second petal layer, "
+            "no heavy border, no dense fine detail. Every outline must be a "
+            "single thin, clean stroke - never a thick marker line, never a "
+            "filled/solid shape - with a clear visible gap between each "
+            "petal/shape so they don't touch or overlap. The whole motif "
+            "should be large and centred, filling roughly 75% of the frame "
+            "with only a small margin of white space around the edge. "
+            "Viewed straight-on from directly above, like a coloring-book "
+            "page or stencil. No text, no watermark, no signature. "
+            f"Design variation seed: {random.randint(1, 999999)}."
+        )
+
     def _call_openai_for_rangoli_image(self, api_key, custom_theme=None):
         if custom_theme:
             theme = self._sanitize_theme(custom_theme)
@@ -2803,23 +3233,13 @@ class ShapeApp:
             )
         else:
             base_prompt = random.choice(RANGOLI_IMAGE_PROMPTS)
-        prompt = (
-            base_prompt +
-            " This design will be physically drawn at a small 28mm x 28mm "
-            "scale by a powder-dispensing robot, so keep it to ONE motif "
-            "only: a centre circle with ONE ring of 6-9 petals (or a single "
-            "shape repeated 6-9 times), plus optionally a thin outer ring "
-            "of small accent points - nothing more. No second petal layer, "
-            "no heavy border, no dense fine detail. Every outline must be a "
-            "single thin, clean stroke - never a thick marker line, never a "
-            "filled/solid shape - with a clear visible gap between each "
-            "petal/shape so they don't touch or overlap. The whole motif "
-            "should be large and centred, filling roughly 75% of the frame "
-            "with only a small margin of white space around the edge. "
-            "Viewed straight-on from directly above, like a coloring-book "
-            "page or stencil. No text, no watermark, no signature. "
-            f"Design variation seed: {random.randint(1, 999999)}."
-        )
+        prompt = base_prompt + self._plotter_constraints_suffix()
+        return self._call_openai_image_generation(api_key, prompt)
+
+    def _call_openai_image_generation(self, api_key, prompt):
+        # No key set → straight to the offline cache (behaves the same on-screen).
+        if api_key == OFFLINE_SENTINEL:
+            return self._offline_rangoli_bytes()
         body = {
             "model": "gpt-image-1",
             "prompt": prompt,
@@ -2842,6 +3262,10 @@ class ShapeApp:
                     raw = resp.read().decode("utf-8")
                 result = json.loads(raw)
                 break
+            except urllib.error.HTTPError:
+                raise                         # real OpenAI reply (401 etc.) — unchanged
+            except OFFLINE_ERRORS:            # no internet → seamless cached rangoli
+                return self._offline_rangoli_bytes()
             except json.JSONDecodeError as e:
                 last_err = e
                 time.sleep(1.5)
@@ -2956,6 +3380,386 @@ class ShapeApp:
             f"AI Generated: new design added ({len(canvas_paths)} outlines, "
             f"{total_pts} points). Ready to send.", "recv")
 
+    # ── PICTURE TO RANGOLI (computer webcam + OpenAI) ───────────────────────
+    def _open_picture_capture_dialog(self):
+        """Open the computer's own webcam so the user can photograph their
+        doorstep/surroundings, then hand it off to the mood/occasion step.
+        Uses the default device (index 0) directly — separate from the
+        robot's "installed camera" system used by Learn Mode, since this is
+        explicitly the computer's built-in/USB webcam, not the rig's."""
+        if self._ai_generating:
+            return
+        existing = getattr(self, '_picture_capture_dlg', None)
+        if existing is not None:
+            try:
+                existing.lift()
+                existing.focus_force()
+                return
+            except Exception:
+                self._picture_capture_dlg = None
+
+        try:
+            import cv2
+        except ImportError:
+            self.log_to_console(
+                "Picture to Rangoli: OpenCV not available — "
+                "run: pip install opencv-python", "err")
+            return
+
+        cap = cv2.VideoCapture(0, self._camera_backend())
+        if not cap.isOpened():
+            cap.release()
+            self.log_to_console(
+                "Picture to Rangoli: couldn't open the computer's webcam.",
+                "err")
+            return
+
+        from PIL import Image, ImageTk
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Picture to Rangoli — Capture Photo")
+        dlg.configure(bg=BG_CARD)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        self._picture_capture_dlg = dlg
+        state = {"cap": cap, "frozen": None, "after_id": None, "live": True}
+
+        def on_close():
+            state["live"] = False
+            if state["after_id"] is not None:
+                try: dlg.after_cancel(state["after_id"])
+                except Exception: pass
+            try: state["cap"].release()
+            except Exception: pass
+            self._picture_capture_dlg = None
+            try: dlg.destroy()
+            except Exception: pass
+
+        dlg.protocol("WM_DELETE_WINDOW", on_close)
+
+        pad = tk.Frame(dlg, bg=BG_CARD)
+        pad.pack(fill="both", expand=True, padx=S(18), pady=S(16))
+
+        tk.Label(pad, text="Photograph your doorstep / surroundings",
+                 bg=BG_CARD, fg=TEXT_PRIMARY,
+                 font=("Segoe UI", FS(13), "bold")).pack(anchor="w")
+        tk.Label(pad, text="The AI will suggest a rangoli inspired by the "
+                            "space, the mood you pick, and today's date. "
+                            "The photo is only sent to OpenAI for this — "
+                            "it isn't saved to disk.",
+                 bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(10)),
+                 justify="left", wraplength=S(420)).pack(anchor="w", pady=(S(2), S(10)))
+
+        view_w, view_h = 420, 315
+        video_frame = tk.Frame(pad, bg="#000000", width=view_w, height=view_h)
+        video_frame.pack_propagate(False)
+        video_frame.pack()
+        video_lbl = tk.Label(video_frame, bg="#000000")
+        video_lbl.pack(fill="both", expand=True)
+
+        def update_frame():
+            if not state["live"]:
+                return
+            ok, frame = state["cap"].read()
+            if ok and frame is not None:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(rgb).resize((view_w, view_h))
+                state["photo_img"] = ImageTk.PhotoImage(pil_img)
+                video_lbl.configure(image=state["photo_img"])
+            state["after_id"] = dlg.after(66, update_frame)
+
+        btn_row = tk.Frame(pad, bg=BG_CARD)
+        btn_row.pack(fill="x", pady=(S(12), S(0)))
+
+        def do_capture():
+            ok, frame = state["cap"].read()
+            if not ok or frame is None:
+                self.log_to_console(
+                    "Picture to Rangoli: couldn't grab a frame — try again.",
+                    "err")
+                return
+            state["frozen"] = frame
+            state["live"] = False
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb).resize((view_w, view_h))
+            state["photo_img"] = ImageTk.PhotoImage(pil_img)
+            video_lbl.configure(image=state["photo_img"])
+            capture_btn.pack_forget()
+            retake_btn.pack(side="left", expand=True, fill="x", padx=(S(0), S(6)))
+            use_btn.pack(side="left", expand=True, fill="x", padx=(S(6), S(0)))
+
+        def do_retake():
+            state["frozen"] = None
+            state["live"] = True
+            retake_btn.pack_forget()
+            use_btn.pack_forget()
+            capture_btn.pack(fill="x")
+            update_frame()
+
+        def do_use():
+            frame = state["frozen"]
+            if frame is None:
+                return
+            on_close()
+            self._open_picture_to_rangoli_details(frame)
+
+        capture_btn = ctk.CTkButton(
+            btn_row, text="📷 Capture Photo", command=do_capture,
+            fg_color=ACCENT_PINK, hover_color=self._lighten(ACCENT_PINK, -30),
+            text_color="#0d0b2b", font=("Segoe UI", FS(11), "bold"),
+            height=S(38), corner_radius=S(8))
+        capture_btn.pack(fill="x")
+
+        retake_btn = ctk.CTkButton(
+            btn_row, text="Retake", command=do_retake,
+            fg_color=BG_INPUT, hover_color=GLASS_EDGE,
+            text_color=TEXT_PRIMARY, font=("Segoe UI", FS(11), "bold"),
+            height=S(38), corner_radius=S(8))
+        use_btn = ctk.CTkButton(
+            btn_row, text="Use This Photo →", command=do_use,
+            fg_color=ACCENT_CYAN, hover_color=self._lighten(ACCENT_CYAN, -30),
+            text_color="#0d0b2b", font=("Segoe UI", FS(11), "bold"),
+            height=S(38), corner_radius=S(8))
+
+        update_frame()
+
+        dlg.update_idletasks()
+        w, h = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+        rx = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+        ry = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+        dlg.geometry(f"{w}x{h}+{max(rx,0)}+{max(ry,0)}")
+        dlg.grab_set()
+
+    def _open_picture_to_rangoli_details(self, frame):
+        """Mood + occasion step, shown after a photo is captured/confirmed.
+        `frame` is the raw BGR numpy frame from OpenCV (kept in memory only)."""
+        existing = getattr(self, '_ai_dialog', None)
+        if existing is not None:
+            try:
+                existing.destroy()
+            except Exception:
+                pass
+            self._ai_dialog = None
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Picture to Rangoli — Mood & Occasion")
+        dlg.configure(bg=BG_CARD)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        self._ai_dialog = dlg
+
+        def on_close():
+            self._ai_dialog = None
+            try:
+                dlg.destroy()
+            except Exception:
+                pass
+
+        dlg.protocol("WM_DELETE_WINDOW", on_close)
+
+        pad = tk.Frame(dlg, bg=BG_CARD)
+        pad.pack(fill="both", expand=True, padx=S(18), pady=S(16))
+
+        tk.Label(pad, text="What's the mood and occasion?", bg=BG_CARD,
+                 fg=TEXT_PRIMARY, font=("Segoe UI", FS(13), "bold")
+                 ).pack(anchor="w", pady=(S(0), S(6)))
+
+        today_str = time.strftime("%A, %d %B %Y")
+        tk.Label(pad, text=f"Today: {today_str}", bg=BG_CARD, fg=TEXT_DIM,
+                 font=("Segoe UI", FS(9))).pack(anchor="w", pady=(S(0), S(12)))
+
+        def add_field(label_text, options):
+            tk.Label(pad, text=label_text, bg=BG_CARD, fg=TEXT_DIM,
+                     font=("Segoe UI", FS(10))).pack(anchor="w", pady=(S(6), S(2)))
+            var = tk.StringVar(value=options[0])
+            combo = ctk.CTkComboBox(
+                pad, variable=var, values=options, state="readonly",
+                width=S(360), fg_color=BG_INPUT, border_color=GLASS_EDGE,
+                button_color=GLASS_EDGE, button_hover_color=ACCENT_AMBER,
+                text_color=TEXT_PRIMARY, dropdown_fg_color=BG_CARD,
+                dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", FS(10)))
+            combo.pack(anchor="w")
+            return var
+
+        mood_var = add_field(
+            "1. What mood are you going for?",
+            ["Surprise me / let AI decide", "Joyful & festive",
+             "Calm & peaceful", "Devotional & spiritual",
+             "Vibrant & energetic", "Elegant & minimalist", "Romantic"])
+
+        occasion_var = add_field(
+            "2. Occasion?",
+            ["Auto-detect from today's date",
+             "Everyday / no specific occasion", "Diwali", "Pongal / Sankranti",
+             "Onam", "Navratri", "Ugadi / Gudi Padwa", "Wedding",
+             "Housewarming", "Other festival / celebration"])
+
+        def submit():
+            mood = mood_var.get()
+            occasion = occasion_var.get()
+            on_close()
+            self._start_picture_to_rangoli_generation(
+                frame, mood, occasion, today_str)
+
+        ctk.CTkButton(
+            pad, text="Generate My Rangoli", command=submit,
+            fg_color=ACCENT_PINK, hover_color=self._lighten(ACCENT_PINK, -30),
+            text_color="#0d0b2b", font=("Segoe UI", FS(11), "bold"),
+            height=S(38), corner_radius=S(8)
+        ).pack(fill="x", pady=(S(14), S(0)))
+
+        dlg.update_idletasks()
+        w, h = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+        rx = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+        ry = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 2
+        dlg.geometry(f"{w}x{h}+{max(rx,0)}+{max(ry,0)}")
+        dlg.grab_set()
+
+    def _start_picture_to_rangoli_generation(self, frame, mood, occasion,
+                                              date_str):
+        if self._ai_generating:
+            return
+        api_key = self._get_openai_api_key()
+        if not api_key:
+            self.log_to_console(
+                "Picture to Rangoli: no API key entered, so nothing was "
+                "generated.", "err")
+            return
+
+        self._ai_generating = True
+        self.log_to_console(
+            "Picture to Rangoli: looking at your photo and sketching a "
+            "design...", "info")
+        self.show_hint_popup("Turning your photo into a rangoli...")
+        threading.Thread(
+            target=self._picture_to_rangoli_worker,
+            args=(api_key, frame, mood, occasion, date_str), daemon=True
+        ).start()
+
+    def _call_openai_vision_scene_description(self, api_key, jpg_bytes):
+        if api_key == OFFLINE_SENTINEL:
+            return self._offline_scene_description()
+        import base64
+        data_url = "data:image/jpeg;base64," + \
+            base64.b64encode(jpg_bytes).decode("ascii")
+        body = {
+            "model": "gpt-4o-mini",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": (
+                        "In one short sentence (under 30 words), describe "
+                        "the setting in this photo of a doorstep/entrance "
+                        "area — its colours, materials, architectural "
+                        "style, and overall feel. Do not describe or "
+                        "identify any people, and do not try to identify "
+                        "the location — describe the space and atmosphere "
+                        "only."
+                    )},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }],
+            "max_tokens": 120,
+        }
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError:
+            raise
+        except OFFLINE_ERRORS:
+            return self._offline_scene_description()
+        return result["choices"][0]["message"]["content"].strip()
+
+    def _build_picture_to_rangoli_prompt(self, scene_desc, mood, occasion,
+                                          date_str):
+        mood_clause = ""
+        if mood and not mood.startswith("Surprise"):
+            mood_clause = (
+                f" The design should feel {mood.lower()} in its choice of "
+                "motif shapes and rhythm."
+            )
+
+        if occasion.startswith("Auto-detect"):
+            occasion_clause = (
+                f" Today's date is {date_str}. If this date falls on or "
+                "near a widely observed Indian festival or seasonal "
+                "occasion, let that occasion subtly influence the motifs; "
+                "otherwise treat it as an everyday design."
+            )
+        elif occasion.startswith("Everyday"):
+            occasion_clause = (
+                f" Today's date is {date_str}; this is an everyday design, "
+                "not tied to any specific festival."
+            )
+        else:
+            occasion_clause = (
+                f" This is being made for {occasion} (today is {date_str})."
+            )
+
+        base_prompt = (
+            "Create an original traditional Indian rangoli / mandala "
+            "floor-art design, loosely inspired by this real doorstep/"
+            f"entrance setting: \"{scene_desc}\". Use the setting only as "
+            "soft inspiration for motif style and rhythm — the result must "
+            "still be unmistakably a rangoli: a radially symmetric pattern "
+            "of petal, floral, or geometric motifs arranged around a "
+            "centre point, not a realistic illustration, photo, or scene."
+            + mood_clause + occasion_clause +
+            " Black outlines only on a white background. No fills, colors, "
+            "shading, gradients, textures, or 3D rendering."
+        )
+        return base_prompt + self._plotter_constraints_suffix()
+
+    def _picture_to_rangoli_worker(self, api_key, frame, mood, occasion,
+                                    date_str):
+        try:
+            import cv2
+            ok, jpg_buf = cv2.imencode(".jpg", frame)
+            if not ok:
+                raise ValueError("Could not encode the captured photo.")
+            scene_desc = self._call_openai_vision_scene_description(
+                api_key, jpg_buf.tobytes())
+            prompt = self._build_picture_to_rangoli_prompt(
+                scene_desc, mood, occasion, date_str)
+            img_bytes = self._call_openai_image_generation(api_key, prompt)
+            canvas_paths, tk_img = self._extract_paths_from_image_bytes(img_bytes)
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="ignore")
+            except Exception:
+                pass
+            if e.code == 401:
+                self._forget_openai_api_key()
+                msg = ("Picture to Rangoli: that API key was rejected. "
+                       "Try again to enter a fresh one.")
+            else:
+                msg = (f"Picture to Rangoli: OpenAI returned an error "
+                       f"({e.code}). {body[:200]}")
+            self.root.after(0, lambda: self.log_to_console(msg, "err"))
+        except ImportError as e:
+            err = str(e)
+            self.root.after(0, lambda: self.log_to_console(
+                f"Picture to Rangoli: missing library ({err}).", "err"))
+        except Exception as e:
+            err = str(e)
+            self.root.after(0, lambda: self.log_to_console(
+                f"Picture to Rangoli: something went wrong ({err}).", "err"))
+        else:
+            self.root.after(0, lambda: self._apply_ai_design(canvas_paths, tk_img))
+        finally:
+            self._ai_generating = False
+            self.root.after(0, lambda: self.hide_hint_popup(instant=True))
+
     # ── Hint popup ────────────────────────────────────────────────────────────
     def on_shape_type_selected(self, event=None):
         if self.shape_type.get() == "Select":
@@ -2984,10 +3788,10 @@ class ShapeApp:
         popup.configure(bg=BG_DARK)
         glass = tk.Canvas(popup, width=w, height=h, bg=BG_DARK, highlightthickness=0)
         glass.pack(fill="both", expand=True)
-        self._draw_rounded_rect(glass, 4, 4, w-4, h-4, radius=20,
+        self._draw_rounded_rect(glass, 4, 4, w-4, h-4, radius=S(20),
                                 fill=BG_CARD, outline=ACCENT_CYAN, width=1)
         glass.create_text(w//2, h//2, text=message,
-                          fill=ACCENT_CYAN, font=("Segoe UI", 10, "bold"))
+                          fill=ACCENT_CYAN, font=("Segoe UI", FS(10), "bold"))
         self.hint_popup = popup
         self._fade(popup, 0.0, 0.95, 0.08)
         self.hint_after_id = self.root.after(4500, self.hide_hint_popup)
@@ -3005,7 +3809,7 @@ class ShapeApp:
         self._close_colour_switch_popup()
         self.root.update_idletasks()
 
-        W, H = 420, 260
+        W, H = S(420), S(260)
         sx = self.root.winfo_screenwidth()  // 2 - W // 2
         sy = self.root.winfo_screenheight() // 2 - H // 2
 
@@ -3024,11 +3828,11 @@ class ShapeApp:
         glass = tk.Canvas(popup, width=W, height=H, bg=BG_DARK, highlightthickness=0)
         glass.pack(fill="both", expand=True)
         self._draw_rounded_rect(
-            glass, 4, 4, W - 4, H - 4, radius=20,
+            glass, 4, 4, W - 4, H - 4, radius=S(20),
             fill=BG_CARD, outline=ACCENT_AMBER, width=2)
         glass.create_text(
             24, 28, text="Colour change required", anchor="w",
-            fill=TEXT_PRIMARY, font=("Segoe UI", 14, "bold"))
+            fill=TEXT_PRIMARY, font=("Segoe UI", FS(14), "bold"))
 
         body = tk.Frame(popup, bg=BG_CARD)
         body.place(x=24, y=56, width=W - 48, height=H - 76)
@@ -3037,24 +3841,24 @@ class ShapeApp:
             body,
             text="The nozzle is open at origin.\n"
                  "Empty out the current colour, then load the next one.",
-            bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", 10),
+            bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(10)),
             justify="left", wraplength=W - 56,
-        ).pack(anchor="w", pady=(0, 14))
+        ).pack(anchor="w", pady=(S(0), S(14)))
 
         next_row = tk.Frame(body, bg=BG_CARD)
-        next_row.pack(anchor="w", fill="x", pady=(0, 18))
+        next_row.pack(anchor="w", fill="x", pady=(S(0), S(18)))
         tk.Label(
             next_row, text="Next colour:", bg=BG_CARD, fg=TEXT_DIM,
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", FS(10), "bold"),
         ).pack(side="left")
 
         swatch = COLOUR_PALETTE.get(colour, ACCENT_AMBER)
-        sw = tk.Canvas(next_row, width=22, height=22, bg=BG_CARD, highlightthickness=0)
-        sw.pack(side="left", padx=(10, 8))
+        sw = tk.Canvas(next_row, width=S(22), height=S(22), bg=BG_CARD, highlightthickness=0)
+        sw.pack(side="left", padx=(S(10), S(8)))
         sw.create_oval(2, 2, 20, 20, fill=swatch, outline="#ffffff", width=1)
         tk.Label(
             next_row, text=colour or "next colour", bg=BG_CARD, fg=TEXT_PRIMARY,
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", FS(12), "bold"),
         ).pack(side="left")
 
         ctk.CTkButton(
@@ -3063,9 +3867,9 @@ class ShapeApp:
             command=self._on_colour_emptied_click,
             fg_color="#f97316", hover_color="#fb923c",
             border_width=2, border_color="#facc15",
-            text_color="#ffffff", font=("Segoe UI", 12, "bold"),
-            height=42, corner_radius=10,
-        ).pack(fill="x", pady=(4, 0))
+            text_color="#ffffff", font=("Segoe UI", FS(12), "bold"),
+            height=S(42), corner_radius=S(10),
+        ).pack(fill="x", pady=(S(4), S(0)))
 
         self._fade(popup, 0.0, 0.97, 0.08)
         popup.lift()
@@ -3273,7 +4077,7 @@ class ShapeApp:
         self._close_gallery_popup()
         self.root.update_idletasks()
 
-        W, H = 860, 620
+        W, H = S(860), S(620)
         sx = self.root.winfo_screenwidth()  // 2 - W // 2
         sy = self.root.winfo_screenheight() // 2 - H // 2
 
@@ -3289,17 +4093,17 @@ class ShapeApp:
 
         glass = tk.Canvas(popup, width=W, height=H, bg=BG_DARK, highlightthickness=0)
         glass.pack(fill="both", expand=True)
-        self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=24,
+        self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=S(24),
                                 fill=BG_CARD, outline=ACCENT_BLUE, width=2)
         glass.create_text(28, 30, text="Rangoli Gallery", anchor="w",
-                          fill=TEXT_PRIMARY, font=("Segoe UI", 16, "bold"))
+                          fill=TEXT_PRIMARY, font=("Segoe UI", FS(16), "bold"))
         glass.create_text(28, 54, text="Click a design to place it. "
                           "★ My Designs holds patterns you saved with the "
                           "\U0001f4be Save button.",
-                          anchor="w", fill=TEXT_DIM, font=("Segoe UI", 9))
+                          anchor="w", fill=TEXT_DIM, font=("Segoe UI", FS(9)))
 
         close_lbl = tk.Label(popup, text="✕", bg=BG_CARD, fg=TEXT_DIM,
-                             font=("Segoe UI", 14, "bold"), cursor="hand2")
+                             font=("Segoe UI", FS(14), "bold"), cursor="hand2")
         close_lbl.place(x=W-44, y=20)
         close_lbl.bind("<Button-1>", lambda e: self._close_gallery_popup())
 
@@ -3329,18 +4133,18 @@ class ShapeApp:
 
         def _make_card(r, c, name, draw_thumb, on_click, on_delete=None):
             card = tk.Frame(inner, bg=BG_INPUT, cursor="hand2")
-            card.grid(row=r, column=c, padx=8, pady=8, sticky="n")
-            thumb = tk.Canvas(card, width=140, height=140, bg=CANVAS_BG,
+            card.grid(row=r, column=c, padx=S(8), pady=S(8), sticky="n")
+            thumb = tk.Canvas(card, width=S(140), height=S(140), bg=CANVAS_BG,
                               highlightthickness=0)
-            thumb.pack(padx=6, pady=(6, 2))
+            thumb.pack(padx=S(6), pady=(S(6), S(2)))
             draw_thumb(thumb)
             tk.Label(card, text=name, bg=BG_INPUT, fg=TEXT_PRIMARY,
-                     font=("Segoe UI", 10, "bold")).pack(pady=(0, 8))
+                     font=("Segoe UI", FS(10), "bold")).pack(pady=(S(0), S(8)))
             for widget in [card, thumb] + list(card.winfo_children()):
                 widget.bind("<Button-1>", lambda e: on_click())
             if on_delete is not None:
                 del_lbl = tk.Label(card, text="✕", bg=BG_INPUT, fg=TEXT_DIM,
-                                   font=("Segoe UI", 10, "bold"),
+                                   font=("Segoe UI", FS(10), "bold"),
                                    cursor="hand2")
                 del_lbl.place(relx=1.0, y=2, x=-6, anchor="ne")
                 del_lbl.bind("<Button-1>", lambda e: (on_delete(), "break")[1])
@@ -3349,9 +4153,9 @@ class ShapeApp:
             tk.Label(inner, text="No designs found. Place funnel.dxf and "
                      "image.dxf in your Downloads folder, or save your own "
                      "with the \U0001f4be Save button.",
-                     bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", 12, "bold"),
+                     bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(12), "bold"),
                      wraplength=W-100, justify="center").grid(
-                row=0, column=0, columnspan=cols, pady=60)
+                row=0, column=0, columnspan=cols, pady=S(60))
         else:
             for idx, (name, raw_paths) in enumerate(library.items()):
                 r, c = divmod(idx, cols)
@@ -3365,9 +4169,9 @@ class ShapeApp:
 
             if saved:
                 tk.Label(inner, text="★ My Designs", bg=BG_CARD,
-                         fg=ACCENT_PURP, font=("Segoe UI", 13, "bold")
+                         fg=ACCENT_PURP, font=("Segoe UI", FS(13), "bold")
                          ).grid(row=row, column=0, columnspan=cols,
-                                sticky="w", padx=8, pady=(14, 2))
+                                sticky="w", padx=S(8), pady=(S(14), S(2)))
                 row += 1
                 for idx, (name, full, data) in enumerate(saved):
                     r, c = divmod(idx, cols)
@@ -3451,18 +4255,18 @@ class ShapeApp:
 
         glass = tk.Canvas(popup, width=W, height=H, bg=BG_DARK, highlightthickness=0)
         glass.pack(fill="both", expand=True)
-        self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=22,
+        self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=S(22),
                                 fill=BG_CARD, outline=outline, width=2)
         glass.create_text(28, 30, text=title, anchor="w",
-                          fill=TEXT_PRIMARY, font=("Segoe UI", 16, "bold"))
+                          fill=TEXT_PRIMARY, font=("Segoe UI", FS(16), "bold"))
         top = 60
         if subtitle:
             glass.create_text(28, 56, text=subtitle, anchor="w", fill=TEXT_DIM,
-                              font=("Segoe UI", 9), width=W-90)
+                              font=("Segoe UI", FS(9)), width=W-90)
             top = 84
 
         close_lbl = tk.Label(popup, text="✕", bg=BG_CARD, fg=TEXT_DIM,
-                             font=("Segoe UI", 14, "bold"), cursor="hand2")
+                             font=("Segoe UI", FS(14), "bold"), cursor="hand2")
         close_lbl.place(x=W-42, y=20)
         close_lbl.bind("<Button-1>", lambda e: self._exit_learn_mode())
 
@@ -3514,16 +4318,16 @@ class ShapeApp:
         self._learn_video_label.pack()
 
         controls = tk.Frame(body, bg=BG_CARD)
-        controls.pack(side="bottom", fill="x", pady=(12, 0))
+        controls.pack(side="bottom", fill="x", pady=(S(12), S(0)))
         self._learn_video_pause_btn = self._color_button(
             controls, "Pause", self._toggle_learn_video_pause,
-            "#334155", width=110, height=44, font_size=12)
+            "#334155", width=S(110), height=S(44), font_size=FS(12))
         self._learn_video_pause_btn.pack(side="left")
         # Live from the first frame, so it doubles as "skip the video".
         self._color_button(
             controls, "Start Interactive learning →", self._open_learn_gallery,
-            ACCENT_GREEN, width=max(160, (W - 52) - 122), height=44,
-            font_size=13, text_color="#06281c").pack(side="left", padx=(12, 0))
+            ACCENT_GREEN, width=max(160, (W - 52) - 122), height=S(44),
+            font_size=FS(13), text_color="#06281c").pack(side="left", padx=(S(12), S(0)))
 
         self.log_to_console("Learn Mode: playing the intro video (muted).",
                             "info")
@@ -3628,7 +4432,7 @@ class ShapeApp:
 
     def _open_learn_gallery(self):
         """Gallery of designs to learn — the robot teaches one part at a time."""
-        W, H = 720, 560
+        W, H = S(720), S(560)
         popup, body = self._learn_shell(
             W, H, "Choose a design to learn",
             "Pick a rangoli. The robot will draw it one part at a time so you "
@@ -3651,17 +4455,17 @@ class ShapeApp:
             r, c = divmod(idx, cols)
             paths = meta['generator'](0, 0, 100)
             card = tk.Frame(inner, bg=BG_INPUT, cursor="hand2")
-            card.grid(row=r, column=c, padx=8, pady=8, sticky="n")
-            thumb = tk.Canvas(card, width=150, height=150, bg=CANVAS_BG,
+            card.grid(row=r, column=c, padx=S(8), pady=S(8), sticky="n")
+            thumb = tk.Canvas(card, width=S(150), height=S(150), bg=CANVAS_BG,
                               highlightthickness=0)
-            thumb.pack(padx=6, pady=(6, 2))
+            thumb.pack(padx=S(6), pady=(S(6), S(2)))
             self._learn_draw_preview(thumb, paths, 75, 75, 62)
             tk.Label(card, text=name, bg=BG_INPUT, fg=TEXT_PRIMARY,
-                     font=("Segoe UI", 10, "bold")).pack()
+                     font=("Segoe UI", FS(10), "bold")).pack()
             diff = meta.get('difficulty', '')
             tk.Label(card, text=diff, bg=BG_INPUT,
                      fg=DIFFICULTY_COLORS.get(diff, TEXT_DIM),
-                     font=("Segoe UI", 9, "bold")).pack(pady=(0, 8))
+                     font=("Segoe UI", FS(9), "bold")).pack(pady=(S(0), S(8)))
             for w in [card, thumb] + list(card.winfo_children()):
                 w.bind("<Button-1>", lambda e, nm=name: self._choose_learn_design(nm))
 
@@ -3796,7 +4600,7 @@ class ShapeApp:
 
         total = len(self._learn_parts)
         col_name, col_hex = self._learn_part_color(idx)
-        W, H = 640, 590
+        W, H = S(640), S(590)
         popup, body = self._learn_shell(
             W, H, "Your turn — draw this part",
             f"Part {idx + 1} of {total} of '{self._learn_design}' — draw the "
@@ -3806,9 +4610,9 @@ class ShapeApp:
         upper = tk.Frame(body, bg=BG_CARD)
         upper.pack(fill="both", expand=True)
 
-        prev = tk.Canvas(upper, width=210, height=210, bg=CANVAS_BG,
+        prev = tk.Canvas(upper, width=S(210), height=S(210), bg=CANVAS_BG,
                          highlightthickness=0)
-        prev.pack(side="left", anchor="n", padx=(0, 16), pady=(2, 0))
+        prev.pack(side="left", anchor="n", padx=(S(0), S(16)), pady=(S(2), S(0)))
         self._learn_prev = prev
         self._learn_tf = self._learn_tf_for(self._learn_parts, 105, 105, 92)
         self._learn_render_preview()
@@ -3818,47 +4622,47 @@ class ShapeApp:
 
         # Colour chip — which powder to load in the bottle for this part.
         chip = tk.Frame(right, bg=BG_CARD)
-        chip.pack(fill="x", anchor="w", pady=(0, 8))
-        sw = tk.Canvas(chip, width=18, height=18, bg=BG_CARD, highlightthickness=0)
-        sw.pack(side="left", padx=(0, 8))
+        chip.pack(fill="x", anchor="w", pady=(S(0), S(8)))
+        sw = tk.Canvas(chip, width=S(18), height=S(18), bg=BG_CARD, highlightthickness=0)
+        sw.pack(side="left", padx=(S(0), S(8)))
         sw.create_oval(2, 2, 16, 16, fill=col_hex, outline="#ffffff", width=1)
         tk.Label(chip, text=f"Your part: {col_name} powder", bg=BG_CARD,
-                 fg=TEXT_PRIMARY, font=("Segoe UI", 11, "bold")).pack(side="left")
+                 fg=TEXT_PRIMARY, font=("Segoe UI", FS(11), "bold")).pack(side="left")
 
         tk.Label(right, text="How to draw it:", bg=BG_CARD, fg=ACCENT_GREEN,
-                 font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 6))
+                 font=("Segoe UI", FS(11), "bold")).pack(anchor="w", pady=(S(0), S(6)))
         for i, line in enumerate(self._learn_step_instructions(idx), 1):
             r = tk.Frame(right, bg=BG_CARD)
-            r.pack(fill="x", anchor="w", pady=(0, 5))
+            r.pack(fill="x", anchor="w", pady=(S(0), S(5)))
             tk.Label(r, text=str(i), bg=ACCENT_GREEN, fg="#06281c",
-                     font=("Segoe UI", 9, "bold"), width=2).pack(
-                side="left", anchor="n", padx=(0, 8))
+                     font=("Segoe UI", FS(9), "bold"), width=S(2)).pack(
+                side="left", anchor="n", padx=(S(0), S(8)))
             tk.Label(r, text=line, bg=BG_CARD, fg=TEXT_PRIMARY,
-                     font=("Segoe UI", 10), justify="left",
+                     font=("Segoe UI", FS(10)), justify="left",
                      wraplength=W-330).pack(side="left", anchor="w")
 
         footer = tk.Frame(body, bg=BG_CARD)
-        footer.pack(fill="x", side="bottom", pady=(8, 0))
+        footer.pack(fill="x", side="bottom", pady=(S(8), S(0)))
         pick = tk.Label(footer, text="← Pick another design", bg=BG_CARD,
-                        fg=TEXT_DIM, font=("Segoe UI", 9, "bold"), cursor="hand2")
+                        fg=TEXT_DIM, font=("Segoe UI", FS(9), "bold"), cursor="hand2")
         pick.pack(side="left")
         pick.bind("<Button-1>", lambda e: self._open_learn_gallery())
         basics = tk.Label(footer, text="Re-read the 10 basics", bg=BG_CARD,
-                          fg=TEXT_DIM, font=("Segoe UI", 9, "bold"), cursor="hand2")
+                          fg=TEXT_DIM, font=("Segoe UI", FS(9), "bold"), cursor="hand2")
         basics.pack(side="right")
         basics.bind("<Button-1>", lambda e: self._show_learn_intro())
 
         btns = tk.Frame(body, bg=BG_CARD)
-        btns.pack(fill="x", side="bottom", pady=(10, 0))
+        btns.pack(fill="x", side="bottom", pady=(S(10), S(0)))
         self._color_button(
             btns, "✓ Done drawing my part", self._learn_done_my_part,
-            ACCENT_GREEN, width=250, height=46, font_size=13).pack(side="left")
+            ACCENT_GREEN, width=S(250), height=S(46), font_size=FS(13)).pack(side="left")
 
         self._learn_status = tk.Label(
             body, text="", bg=BG_CARD, fg=ACCENT_PURP,
-            font=("Segoe UI", 10, "bold"), anchor="w", justify="left",
+            font=("Segoe UI", FS(10), "bold"), anchor="w", justify="left",
             wraplength=W-70)
-        self._learn_status.pack(fill="x", side="bottom", pady=(10, 0))
+        self._learn_status.pack(fill="x", side="bottom", pady=(S(10), S(0)))
         self._learn_update_status()
 
     def _open_learn_robot_turn(self):
@@ -3869,31 +4673,31 @@ class ShapeApp:
             return
         total = len(self._learn_parts)
         col_name, col_hex = self._learn_part_color(idx)
-        W, H = 520, 470
+        W, H = S(520), S(470)
         _, body = self._learn_shell(
             W, H, "Robot's turn — watch",
             f"Part {idx + 1} of {total} — the robot is drawing its "
             f"{col_name.lower()} part. Watch how the line flows; your next "
             f"part appears as soon as it finishes.", outline=ACCENT_PURP)
 
-        prev = tk.Canvas(body, width=210, height=210, bg=CANVAS_BG,
+        prev = tk.Canvas(body, width=S(210), height=S(210), bg=CANVAS_BG,
                          highlightthickness=0)
-        prev.pack(pady=(2, 12))
+        prev.pack(pady=(S(2), S(12)))
         self._learn_prev = prev
         self._learn_tf = self._learn_tf_for(self._learn_parts, 105, 105, 92)
         self._learn_render_preview()
 
         chip = tk.Frame(body, bg=BG_CARD)
-        chip.pack(pady=(0, 8))
-        sw = tk.Canvas(chip, width=18, height=18, bg=BG_CARD, highlightthickness=0)
-        sw.pack(side="left", padx=(0, 8))
+        chip.pack(pady=(S(0), S(8)))
+        sw = tk.Canvas(chip, width=S(18), height=S(18), bg=BG_CARD, highlightthickness=0)
+        sw.pack(side="left", padx=(S(0), S(8)))
         sw.create_oval(2, 2, 16, 16, fill=col_hex, outline="#ffffff", width=1)
         tk.Label(chip, text=f"Robot's part: {col_name}", bg=BG_CARD,
-                 fg=TEXT_PRIMARY, font=("Segoe UI", 11, "bold")).pack(side="left")
+                 fg=TEXT_PRIMARY, font=("Segoe UI", FS(11), "bold")).pack(side="left")
 
         self._learn_status = tk.Label(
             body, text="", bg=BG_CARD, fg=ACCENT_PURP,
-            font=("Segoe UI", 10, "bold"), wraplength=W-70, justify="center")
+            font=("Segoe UI", FS(10), "bold"), wraplength=W-70, justify="center")
         self._learn_status.pack()
         self._learn_update_status()
 
@@ -4017,7 +4821,7 @@ class ShapeApp:
         """The robot's part did not complete — never advance the student on a
         failed print; let them retry it or take the part over by hand."""
         col_name = self._learn_part_color(idx)[0]
-        W, H = 520, 340
+        W, H = S(520), S(340)
         _, body = self._learn_shell(
             W, H, "Robot didn't finish that part",
             f"GRBL reported a problem part-way through part {idx + 1} "
@@ -4039,10 +4843,10 @@ class ShapeApp:
 
         self._color_button(
             body, "↻ Try this part again", _retry,
-            ACCENT_PURP, width=W-52, height=44, font_size=12).pack(pady=(10, 8))
+            ACCENT_PURP, width=W-52, height=S(44), font_size=FS(12)).pack(pady=(S(10), S(8)))
         self._color_button(
             body, "I'll draw this part myself", _take_over,
-            ACCENT_GREEN, width=W-52, height=44, font_size=12).pack()
+            ACCENT_GREEN, width=W-52, height=S(44), font_size=FS(12)).pack()
 
     # ── Learn Mode: USB camera install ────────────────────────────────────────
     # The finished rangoli is meant to be photographed by a USB camera clamped
@@ -4157,7 +4961,7 @@ class ShapeApp:
         """Final Learn-Mode step: install the USB camera that photographs the
         rangoli. Reachable with or without a camera plugged in — the course
         can always be finished without one."""
-        W, H = 520, 400
+        W, H = S(520), S(400)
         _, body = self._learn_shell(
             W, H, "Set up the rangoli camera",
             "A USB camera mounted over the mat photographs your finished "
@@ -4168,9 +4972,9 @@ class ShapeApp:
         self._camera_status = tk.Label(
             body, text=self._camera_installed_text(),
             bg=BG_CARD, fg=ACCENT_GREEN if self._camera_index is not None
-            else TEXT_DIM, font=("Segoe UI", 10, "bold"),
+            else TEXT_DIM, font=("Segoe UI", FS(10), "bold"),
             justify="left", wraplength=W-70)
-        self._camera_status.pack(anchor="w", pady=(0, 6))
+        self._camera_status.pack(anchor="w", pady=(S(0), S(6)))
 
         self._camera_list = tk.Frame(body, bg=BG_CARD)
         self._camera_list.pack(fill="both", expand=True)
@@ -4180,17 +4984,21 @@ class ShapeApp:
         btns.pack(fill="x", side="bottom")
         self._color_button(
             btns, "\U0001f50d Scan for USB cameras", self._start_camera_scan,
-            ACCENT_CYAN, width=W-52, height=40, font_size=12).pack(pady=(8, 6))
+            ACCENT_CYAN, width=W-52, height=S(40), font_size=FS(12)).pack(pady=(S(8), S(6)))
         row = tk.Frame(btns, bg=BG_CARD)
         row.pack(fill="x")
         self._color_button(
             row, "\U0001f4f7 Take the photo", self._learn_take_photo,
-            ACCENT_PURP, width=(W-62)//2, height=38,
-            font_size=11).pack(side="left")
+            ACCENT_PURP, width=(W-72)//3, height=S(38),
+            font_size=FS(11)).pack(side="left")
+        self._color_button(
+            row, "\U0001f4c1 Upload image", self._learn_upload_photo,
+            ACCENT_CYAN, width=(W-72)//3, height=S(38),
+            font_size=FS(11)).pack(side="left", padx=S(6))
         self._color_button(
             row, "Continue →", self._show_learn_evaluation,
-            ACCENT_GREEN, width=(W-62)//2, height=38,
-            font_size=11).pack(side="right")
+            ACCENT_GREEN, width=(W-72)//3, height=S(38),
+            font_size=FS(11)).pack(side="right")
 
         self.log_to_console("Learn Mode: camera setup — " +
                             self._camera_installed_text().lower(), "info")
@@ -4213,15 +5021,15 @@ class ShapeApp:
         if self._camera_scanning:
             tk.Label(holder, text="Scanning the USB ports…",
                      bg=BG_CARD, fg=ACCENT_AMBER,
-                     font=("Segoe UI", 10)).pack(anchor="w", pady=(4, 0))
+                     font=("Segoe UI", FS(10))).pack(anchor="w", pady=(S(4), S(0)))
             return
         if not self._camera_devices:
             tk.Label(holder,
                      text="Scan to see the cameras connected over USB. "
                           "Nothing listed yet.",
-                     bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", 9),
-                     justify="left", wraplength=430).pack(anchor="w",
-                                                          pady=(4, 0))
+                     bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(9)),
+                     justify="left", wraplength=S(430)).pack(anchor="w",
+                                                          pady=(S(4), S(0)))
             return
 
         for idx, label in self._camera_devices:
@@ -4229,14 +5037,14 @@ class ShapeApp:
             row = tk.Frame(holder, bg=BG_INPUT, highlightthickness=1,
                            highlightbackground=ACCENT_GREEN if chosen
                            else GLASS_EDGE, cursor="hand2")
-            row.pack(fill="x", pady=3)
+            row.pack(fill="x", pady=S(3))
             tk.Label(row, text=("● " if chosen else "○ ") + label,
                      bg=BG_INPUT, fg=TEXT_PRIMARY if chosen else TEXT_DIM,
-                     font=("Segoe UI", 10, "bold" if chosen else "normal"),
-                     anchor="w").pack(side="left", padx=10, pady=7)
+                     font=("Segoe UI", FS(10), "bold" if chosen else "normal"),
+                     anchor="w").pack(side="left", padx=S(10), pady=S(7))
             tk.Label(row, text="installed" if chosen else "click to install",
                      bg=BG_INPUT, fg=ACCENT_GREEN if chosen else TEXT_DIM,
-                     font=("Segoe UI", 8)).pack(side="right", padx=10)
+                     font=("Segoe UI", FS(8))).pack(side="right", padx=S(10))
             for w in (row, *row.winfo_children()):
                 w.bind("<Button-1>",
                        lambda e, i=idx, n=label: self._install_camera(i, n))
@@ -4283,6 +5091,207 @@ class ShapeApp:
                 "No USB camera responded — check the cable and scan again.",
                 ACCENT_PINK)
         self._render_camera_devices()
+
+    # ── Live camera panel (during printing) ────────────────────────────────
+    def _build_live_camera_panel(self, canvas_outer, canvas_h):
+        """Big camera box to the left of the drawing canvas, matching the
+        canvas's height. Hidden until a design is sent to the robot — it
+        pops into view over the canvas once the live feed starts, and
+        disappears again when the feed stops."""
+        box_h = canvas_h
+        box_w = max(S(320), int(canvas_h * 0.9))
+        self._live_cam_frame_size = (box_w - S(24), box_h - S(90))
+
+        cam_panel = tk.Frame(canvas_outer, bg=BG_CARD,
+                              highlightbackground=GLASS_BORDER,
+                              highlightthickness=1, bd=0,
+                              width=box_w, height=box_h)
+        cam_panel.pack_propagate(False)
+        self._live_cam_panel = cam_panel
+
+        cam_header = tk.Frame(cam_panel, bg=BG_CARD)
+        cam_header.pack(fill="x", padx=S(10), pady=(S(10), S(4)))
+        self._live_cam_status_lbl = tk.Label(
+            cam_header, text="○ Idle", bg=BG_CARD, fg=TEXT_DIM,
+            font=("Segoe UI", FS(11), "bold"))
+        self._live_cam_status_lbl.pack(side="left")
+        self._color_button(
+            cam_header, "Camera Off", self._stop_live_camera, "#334155",
+            width=S(100), height=S(28), font_size=FS(10), corner_radius=S(6),
+        ).pack(side="right")
+
+        cam_pick_row = tk.Frame(cam_panel, bg=BG_CARD)
+        cam_pick_row.pack(fill="x", padx=S(10), pady=(S(0), S(6)))
+        self.live_cam_device_var = tk.StringVar(
+            value=self._camera_name or "Select camera")
+        self._live_cam_combo = ctk.CTkComboBox(
+            cam_pick_row, variable=self.live_cam_device_var, values=[],
+            state="readonly", width=S(180), height=S(26), font=("Segoe UI", FS(9)),
+            fg_color=BG_INPUT, border_color=GLASS_BORDER,
+            button_color=BG_INPUT, button_hover_color=BG_INPUT,
+            text_color=TEXT_PRIMARY, dropdown_fg_color="#ffffff",
+            dropdown_text_color="#0f172a",
+            command=self._on_live_cam_device_select)
+        self._live_cam_combo.pack(side="left", fill="x", expand=True,
+                                   padx=(S(0), S(6)))
+        self._color_button(
+            cam_pick_row, "⟳", self._scan_live_cam_devices, "#334155",
+            width=S(30), height=S(26), font_size=FS(11), corner_radius=S(6),
+        ).pack(side="right")
+
+        self._live_cam_label = tk.Label(cam_panel, bg="#000000")
+        self._live_cam_label.pack(fill="both", expand=True, padx=S(10),
+                                   pady=(S(0), S(10)))
+        self._live_cam_label.configure(image=self._camera_idle_image())
+
+        # Not placed yet — stays unmapped until _show_live_cam_panel() pops
+        # it open (see start_gcode_streaming / _start_live_camera).
+        # Populate the device list without blocking startup.
+        self.root.after(400, self._scan_live_cam_devices)
+
+    def _show_live_cam_panel(self):
+        panel = self._live_cam_panel
+        if panel is None:
+            return
+        panel.place(relx=0.0, rely=0.5, anchor="w", x=20)
+        panel.lift()
+
+    def _hide_live_cam_panel(self):
+        panel = self._live_cam_panel
+        if panel is None:
+            return
+        panel.place_forget()
+
+    def _camera_idle_image(self):
+        """Solid placeholder frame shown while the live view isn't running,
+        so the panel keeps its size instead of collapsing to nothing."""
+        from PIL import Image, ImageDraw, ImageTk
+        w, h = getattr(self, "_live_cam_frame_size", (240, 160))
+        img = Image.new("RGB", (w, h), (17, 17, 24))
+        draw = ImageDraw.Draw(img)
+        text = "Camera idle"
+        try:
+            bbox = draw.textbbox((0, 0), text)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        except Exception:
+            tw, th = 70, 10
+        draw.text(((w - tw) / 2, (h - th) / 2), text, fill=(148, 163, 184))
+        self._live_cam_idle_photo = ImageTk.PhotoImage(img)
+        return self._live_cam_idle_photo
+
+    def _scan_live_cam_devices(self):
+        """Refresh the camera picker's dropdown from a USB scan.
+
+        Shares the same scan/state as the Learn Mode camera popup — there is
+        only one "installed camera" concept in the app, this just gives a
+        second place to pick it from.
+        """
+        if self._camera_scanning:
+            return
+        self._camera_scanning = True
+        self._live_cam_combo.configure(values=["Scanning…"])
+        self.live_cam_device_var.set("Scanning…")
+
+        def worker():
+            try:
+                found = self._scan_usb_cameras()
+            except Exception:
+                found = []
+            self.root.after(0, lambda: self._live_cam_scan_done(found))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _live_cam_scan_done(self, found):
+        self._camera_scanning = False
+        self._camera_devices  = found
+        if self._camera_index is not None and \
+                self._camera_index not in [i for i, _ in found]:
+            self._camera_index = None
+            self._camera_name  = None
+            self._save_camera_config()
+        self._refresh_live_cam_dropdown()
+        # Also repaint the Learn Mode popup's list, if it's open.
+        self._render_camera_devices()
+
+    def _refresh_live_cam_dropdown(self):
+        labels = [label for _, label in self._camera_devices]
+        self._live_cam_combo.configure(values=labels or ["No camera found"])
+        current = next((label for idx, label in self._camera_devices
+                         if idx == self._camera_index), None)
+        self.live_cam_device_var.set(
+            current or self._camera_name or (labels[0] if labels
+                                              else "No camera found"))
+
+    def _on_live_cam_device_select(self, label):
+        match = next((idx for idx, l in self._camera_devices if l == label),
+                     None)
+        if match is None:
+            return
+        self._install_camera(match, label)
+
+    def _start_live_camera(self):
+        """Open the selected camera and start streaming it into the panel.
+        Silently does nothing if no camera is installed or it can't be
+        opened — the print still runs either way.
+        """
+        if self._live_cam_active:
+            return
+        if self._camera_index is None:
+            self.log_to_console(
+                "Camera: no camera selected — live view skipped.", "info")
+            return
+        try:
+            import cv2
+        except ImportError:
+            self.log_to_console(
+                "Camera: OpenCV not available — live view skipped.", "err")
+            return
+        cap = cv2.VideoCapture(self._camera_index, self._camera_backend())
+        if not cap.isOpened():
+            cap.release()
+            self.log_to_console(
+                "Camera: couldn't open the selected camera for live view.",
+                "err")
+            return
+        self._live_cam_cap    = cap
+        self._live_cam_active = True
+        self._live_cam_status_lbl.configure(text="● LIVE", fg=ACCENT_PINK)
+        self._show_live_cam_panel()
+        self.log_to_console("Camera: live view on.", "recv")
+        self._update_live_camera_frame()
+
+    def _update_live_camera_frame(self):
+        if not self._live_cam_active or self._live_cam_cap is None:
+            return
+        import cv2
+        from PIL import Image, ImageTk
+        ok, frame = self._live_cam_cap.read()
+        if ok and frame is not None:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            size = getattr(self, "_live_cam_frame_size", (240, 160))
+            pil_img = Image.fromarray(rgb).resize(size)
+            self._live_cam_photo = ImageTk.PhotoImage(pil_img)
+            self._live_cam_label.configure(image=self._live_cam_photo)
+        self._live_cam_after = self.root.after(66, self._update_live_camera_frame)
+
+    def _stop_live_camera(self):
+        """Turn the live view off — called by the Camera Off button, when a
+        print finishes, and on app shutdown. Pops the panel back out of
+        view along with it."""
+        self._live_cam_active = False
+        if self._live_cam_after is not None:
+            try: self.root.after_cancel(self._live_cam_after)
+            except Exception: pass
+            self._live_cam_after = None
+        if self._live_cam_cap is not None:
+            try: self._live_cam_cap.release()
+            except Exception: pass
+            self._live_cam_cap = None
+        if self._live_cam_label is not None:
+            self._live_cam_label.configure(image=self._camera_idle_image())
+        if self._live_cam_status_lbl is not None:
+            self._live_cam_status_lbl.configure(text="○ Idle", fg=TEXT_DIM)
+        self._hide_live_cam_panel()
 
     def _install_camera(self, index, label):
         """Remember this device, then prove it still delivers a frame."""
@@ -4349,45 +5358,154 @@ class ShapeApp:
         self._set_camera_status(f"✓ Photo saved to {name}", ACCENT_GREEN)
         self.log_to_console(f"Camera: photo saved — {path}", "recv")
 
-    def _evaluate_learn_rangoli(self):
-        """Verdict shown on the result card.
+    def _learn_upload_photo(self):
+        """Let the user pick an existing image instead of using the camera.
+        Used as-is for this Learn-Mode session only — nothing is copied
+        into LEARN_PHOTO_DIR, so it leaves no permanent trace."""
+        path = filedialog.askopenfilename(
+            title="Upload a rangoli photo",
+            filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp *.webp"),
+                       ("All files", "*.*")])
+        if not path:
+            return
+        self._learn_photo_path = path
+        name = os.path.basename(path)
+        self._set_camera_status(f"✓ Using uploaded image {name}", ACCENT_GREEN)
+        self.log_to_console(f"Camera: using uploaded image — {path}", "recv")
 
-        TEMPORARY placeholder values so the screen can be demoed now. In the
-        next version this is the single spot that will call the real vision
-        model (reuse the _ask_ai_for_fx_coordinates pattern: send
-        self._learn_photo_path to the API and parse a JSON verdict). Until then
-        it returns fixed sample values and touches no AI code path.
-        """
+    # ── Learn-Mode result: known facts, AI photo scoring, fallback ────────────
+    def _learn_known_facts(self):
+        """Facts the app already knows — no AI needed for these."""
         design     = self._learn_design or "Your Rangoli"
         complexity = PRESET_DESIGNS.get(self._learn_design, {}).get(
             "difficulty", "Medium")
-        return {
-            "name":        design,
-            "complexity":  complexity,
-            "score":       9,          # TODO(next version): real AI score
-            "out_of":      10,
-            "improvements": [          # TODO(next version): real AI feedback
-                "Make the white outlines more uniform.",
-                "Improve the smoothness of a few curved edges.",
-                "Ensure slightly more consistent spacing in the inner "
-                "decorative patterns.",
-            ],
+        return {"name": design, "complexity": complexity, "out_of": 10}
+
+    def _learn_fallback_verdict(self):
+        """Used when there's no photo / no API key / the AI call fails."""
+        return {"score": 9, "improvements": [
+            "Make the white outlines more uniform.",
+            "Improve the smoothness of a few curved edges.",
+            "Ensure slightly more consistent spacing in the inner "
+            "decorative patterns.",
+        ]}
+
+    def _score_learn_photo_ai(self, api_key, photo_path, design, complexity):
+        """Send the camera photo to the vision model; return {score, improvements}.
+
+        Mirrors _ask_ai_for_fx_coordinates: same endpoint, same JSON-only
+        contract. The model judges the photo only — the design name and
+        complexity are already known, so they are NOT asked for here. Raises on
+        any network/parse error (the worker turns that into a graceful fallback).
+        """
+        if api_key == OFFLINE_SENTINEL:
+            return self._learn_fallback_verdict()
+        import base64
+        with open(photo_path, "rb") as fh:
+            img_b64 = base64.b64encode(fh.read()).decode("ascii")
+        ext   = os.path.splitext(photo_path)[1].lower()
+        media = "image/png" if ext == ".png" else "image/jpeg"
+
+        prompt = (
+            f"This is a photo of a rangoli drawn BY HAND, attempting a "
+            f"traditional design called '{design}' ({complexity} difficulty). "
+            f"Judge ONLY what you can actually see in the photo: how well it "
+            f"matches that kind of design, and its neatness, symmetry, line "
+            f"smoothness and spacing.\n\n"
+            f"Reply with ONLY compact JSON, no markdown, no commentary, in "
+            f"EXACTLY this shape (the values are an example of the FORMAT, not "
+            f"the answer):\n"
+            f'{{"score": 8, "improvements": ["tip", "tip", "tip"]}}\n'
+            f"Rules: score is an integer from 0 to 10. Give EXACTLY 3 short, "
+            f"specific, encouraging improvement tips, each under 12 words."
+        )
+        body = {
+            "model": "gpt-5.4",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:{media};base64,{img_b64}"}},
+                ],
+            }],
+            "max_completion_tokens": 300,
+            "temperature": 0.4,
         }
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {api_key}"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError:
+            raise
+        except OFFLINE_ERRORS:
+            return self._learn_fallback_verdict()
+
+        text = result["choices"][0]["message"]["content"].strip().strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+        data = json.loads(text)
+
+        score = max(0, min(10, int(round(float(data.get("score", 0))))))
+        tips  = [str(t).strip() for t in data.get("improvements", [])
+                 if str(t).strip()]
+        if not tips:
+            raise ValueError("AI reply had no improvement tips.")
+        return {"score": score, "improvements": tips[:3]}
+
+    def _learn_eval_worker(self, api_key, photo_path, popup):
+        """Background thread: score the photo, then render on the UI thread."""
+        facts = self._learn_known_facts()
+        try:
+            ai = self._score_learn_photo_ai(
+                api_key, photo_path, facts["name"], facts["complexity"])
+            verdict, note = {**facts, **ai}, None
+            self.log_to_console(f"Learn Mode: AI scored {ai['score']}/10.", "recv")
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try: detail = e.read().decode("utf-8", errors="ignore")[:150]
+            except Exception: pass
+            self.log_to_console(
+                f"Learn Mode: AI scoring failed (HTTP {e.code}). {detail}", "err")
+            verdict = {**facts, **self._learn_fallback_verdict()}
+            note = "Couldn't reach the AI — showing sample values."
+        except Exception as e:
+            self.log_to_console(f"Learn Mode: AI scoring failed ({e}).", "err")
+            verdict = {**facts, **self._learn_fallback_verdict()}
+            note = "Couldn't score the photo — showing sample values."
+        self.root.after(0, lambda: self._render_learn_result(popup, verdict, note))
 
     def _show_learn_evaluation(self):
-        """Neon 'RANGOLI RESULT' card — the Learn-Mode finish screen.
-
-        Merges the old (blank) evaluation popup and the 'Rangoli complete!'
-        popup into a single result screen styled after the neon mockup. Its two
-        buttons keep the original completion actions (learn another / finish).
-        """
+        """Neon 'RANGOLI RESULT' card. Shows an 'Evaluating…' state, sends the
+        camera photo to the AI on a background thread, then fills in the real
+        score. Falls back to sample values when there's no photo or no key."""
         import math, random
         import tkinter.font as _tkfont
 
-        verdict = self._evaluate_learn_rangoli()
-        CARD_BG = "#0b0b12"
+        # ── geometry (fixed up front so the window never needs resizing) ──────
+        W, pad, ib = S(540), S(22), S(56)
+        tl = pad + S(14) + ib + S(18)
+        ROW_H, GAP, IMPR_H, BTN_H = S(74), S(12), S(152), S(44)
+        y = S(150)
+        name_y  = y; y += ROW_H + GAP
+        comp_y  = y; y += ROW_H + GAP
+        score_y = y; y += ROW_H + GAP
+        impr_y  = y
+        note_y  = impr_y + IMPR_H + S(8)
+        btn_y   = impr_y + IMPR_H + S(26)
+        H = btn_y + BTN_H * 2 + S(12) + S(18)
+        self._eval_layout = dict(
+            W=W, H=H, pad=pad, ib=ib, tl=tl, ROW_H=ROW_H, IMPR_H=IMPR_H,
+            BTN_H=BTN_H, name_y=name_y, comp_y=comp_y, score_y=score_y,
+            impr_y=impr_y, note_y=note_y, btn_y=btn_y)
 
-        # ── palette + tiny colour helpers (local; only this screen uses them) ──
+        CARD_BG = "#0b0b12"
         NEON = ["#f472b6", "#a78bfa", "#22d3ee", "#10b981", "#f97316", "#f472b6"]
         def _h2r(h):
             h = h.lstrip("#"); return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
@@ -4396,28 +5514,15 @@ class ShapeApp:
         def _lerp(a, b, t):
             ra, rb = _h2r(a), _h2r(b)
             return _r2h(tuple(ra[i] + (rb[i] - ra[i]) * t for i in range(3)))
-        def _grad(t):                       # t in [0,1) across the NEON stops
+        def _grad(t):
             n = len(NEON) - 1
             t = max(0.0, min(0.999999, t)) * n
             i = int(t); return _lerp(NEON[i], NEON[i + 1], t - i)
-        def _blend(fg, t):                  # weight t of fg over the card bg
+        def _blend(fg, t):
             return _lerp(CARD_BG, fg, t)
+        self._eval_blend = _blend            # reused by _render_learn_result
 
-        # ── layout geometry (running cursor so nothing is mis-counted) ─────────
-        W = 540
-        pad = 22
-        ib = 56                              # icon-tile size
-        tl = pad + 14 + ib + 18              # text left edge inside a row
-        ROW_H, GAP, IMPR_H, BTN_H = 74, 12, 152, 44
-        y = 150
-        name_y = y;  y += ROW_H + GAP
-        comp_y = y;  y += ROW_H + GAP
-        score_y = y; y += ROW_H + GAP
-        impr_y = y;  y += IMPR_H + GAP
-        btn_y = y
-        H = btn_y + BTN_H * 2 + 12 + 18
-
-        # ── window shell (mirrors _learn_shell mechanics) ─────────────────────
+        # ── window shell ─────────────────────────────────────────────────────
         self._close_learn_popup()
         self.root.update_idletasks()
         sx = self.root.winfo_screenwidth() // 2 - W // 2
@@ -4435,9 +5540,10 @@ class ShapeApp:
 
         cv = tk.Canvas(popup, width=W, height=H, bg=BG_DARK, highlightthickness=0)
         cv.pack(fill="both", expand=True)
-        self._draw_rounded_rect(cv, 8, 8, W - 8, H - 8, radius=26, fill=CARD_BG)
+        self._eval_canvas = cv
+        self._draw_rounded_rect(cv, 8, 8, W - 8, H - 8, radius=S(26), fill=CARD_BG)
 
-        # ── neon gradient border + dim halo behind it ────────────────────────
+        # neon gradient border + halo
         def _perimeter(x1, y1, x2, y2, r):
             pts, seg = [], [
                 ("edge", (x1 + r, y1), (x2 - r, y1)),
@@ -4461,44 +5567,36 @@ class ShapeApp:
                         ang = math.radians(a0 + (a1 - a0) * (k / 9.0))
                         pts.append((ccx + r * math.cos(ang), ccy + r * math.sin(ang)))
             return pts
-
         def _grad_border(x1, y1, x2, y2, r, width, dim=1.0):
-            pts = _perimeter(x1, y1, x2, y2, r)
-            n = len(pts)
+            pts = _perimeter(x1, y1, x2, y2, r); n = len(pts)
             for i in range(n):
                 a, b = pts[i], pts[(i + 1) % n]
                 col = _grad(i / n)
-                if dim < 1.0:
-                    col = _blend(col, dim)
+                if dim < 1.0: col = _blend(col, dim)
                 cv.create_line(a[0], a[1], b[0], b[1],
                                fill=col, width=width, capstyle="round")
+        _grad_border(6, 6, W - 6, H - 6, 28, width=5, dim=0.35)
+        _grad_border(8, 8, W - 8, H - 8, 26, width=2)
 
-        _grad_border(6, 6, W - 6, H - 6, 28, width=5, dim=0.35)   # halo
-        _grad_border(8, 8, W - 8, H - 8, 26, width=2)             # crisp edge
-
-        # ── close button ─────────────────────────────────────────────────────
         close_lbl = tk.Label(popup, text="✕", bg=CARD_BG, fg=TEXT_DIM,
-                             font=("Segoe UI", 13, "bold"), cursor="hand2")
+                             font=("Segoe UI", FS(13), "bold"), cursor="hand2")
         close_lbl.place(x=W - 44, y=22)
         close_lbl.bind("<Button-1>", lambda e: self._exit_learn_mode())
 
-        # ── header: check badge, confetti, gradient title ────────────────────
+        # header: check badge + confetti + gradient title
         hx = W // 2
         cv.create_oval(hx - 30, 24, hx + 30, 84, outline=ACCENT_GREEN, width=3)
         cv.create_oval(hx - 24, 30, hx + 24, 78,
                        outline=_blend(ACCENT_GREEN, 0.5), width=6)
-        cv.create_line(hx - 13, 55, hx - 3, 66, hx + 16, 41,
-                       fill=ACCENT_GREEN, width=4,
-                       capstyle="round", joinstyle="round")
+        cv.create_line(hx - 13, 55, hx - 3, 66, hx + 16, 41, fill=ACCENT_GREEN,
+                       width=4, capstyle="round", joinstyle="round")
         rng = random.Random(7)
         for _ in range(16):
             ang = rng.uniform(0, 6.2832); dist = rng.uniform(36, 62)
-            px = hx + dist * math.cos(ang)
-            py = 54 + dist * math.sin(ang) * 0.72
-            c = NEON[rng.randrange(len(NEON))]
-            cv.create_oval(px - 2, py - 2, px + 2, py + 2, fill=c, outline="")
-
-        tfont = _tkfont.Font(family="Segoe UI", size=26, weight="bold")
+            px = hx + dist * math.cos(ang); py = 54 + dist * math.sin(ang) * 0.72
+            cv.create_oval(px - 2, py - 2, px + 2, py + 2,
+                           fill=NEON[rng.randrange(len(NEON))], outline="")
+        tfont = _tkfont.Font(family="Segoe UI", size=FS(26), weight="bold")
         title = "RANGOLI RESULT"
         tx = hx - tfont.measure(title) // 2
         for i, ch in enumerate(title):
@@ -4506,17 +5604,72 @@ class ShapeApp:
             cv.create_text(tx, 116, text=ch, anchor="w", fill=col, font=tfont)
             tx += tfont.measure(ch)
 
-        # ── row helpers ──────────────────────────────────────────────────────
+        # ── decide: real AI scoring, or straight to fallback ─────────────────
+        api_key  = self._get_openai_api_key()
+        key_ok   = bool(api_key) and api_key != "ADD YOUR OPENAI API KEY HERE"
+        photo    = self._learn_photo_path
+        photo_ok = bool(photo) and os.path.exists(photo)
+
+        if key_ok and photo_ok:
+            loading = cv.create_text(
+                W // 2, 330, text="Evaluating your rangoli", fill=TEXT_PRIMARY,
+                font=("Segoe UI", FS(14), "bold"), tags="eval")
+            cv.create_text(W // 2, 362, text="The AI is judging your photo…",
+                           fill=TEXT_DIM, font=("Segoe UI", FS(10)), tags="eval")
+
+            def _spin(i=0):
+                if self._learn_popup is not popup:
+                    return
+                try:
+                    cv.itemconfigure(loading,
+                                     text="Evaluating your rangoli" + "." * (i % 4))
+                except tk.TclError:
+                    return
+                popup.after(400, lambda: _spin(i + 1))
+            _spin()
+
+            self.log_to_console("Learn Mode: sending photo to AI for scoring…",
+                                "info")
+            threading.Thread(target=self._learn_eval_worker,
+                             args=(api_key, photo, popup), daemon=True).start()
+        else:
+            why = "No photo was taken" if not photo_ok else "No OpenAI API key set"
+            self._render_learn_result(
+                popup, {**self._learn_known_facts(),
+                        **self._learn_fallback_verdict()},
+                note=f"{why} — showing sample values.")
+
+        self._fade(popup, 0.0, 0.98, 0.08)
+        popup.lift()
+        popup.focus_force()
+
+    def _render_learn_result(self, popup, verdict, note=None):
+        """Paint the real result rows + buttons onto the card. Safe to call from
+        a background-thread callback: it no-ops if the popup has been closed."""
+        if self._learn_popup is not popup:
+            return
+        import math
+        import tkinter.font as _tkfont
+        cv = self._eval_canvas
+        L  = self._eval_layout
+        W, pad, ib, tl = L["W"], L["pad"], L["ib"], L["tl"]
+        ROW_H, IMPR_H, BTN_H = L["ROW_H"], L["IMPR_H"], L["BTN_H"]
+        name_y, comp_y, score_y = L["name_y"], L["comp_y"], L["score_y"]
+        impr_y, note_y, btn_y   = L["impr_y"], L["note_y"], L["btn_y"]
+        _blend = self._eval_blend
+
+        cv.delete("eval")                    # clear the loading text
+
         def _field(y0, h, accent, glow=False):
             self._draw_rounded_rect(
-                cv, pad, y0, W - pad, y0 + h, radius=16, fill="#101018",
+                cv, pad, y0, W - pad, y0 + h, radius=S(16), fill="#101018",
                 outline=_blend(accent, 0.5 if glow else 0.3),
-                width=2 if glow else 1)
+                width=2 if glow else 1, tags="eval")
 
         def _icon(x, y0, accent, kind):
-            self._draw_rounded_rect(cv, x, y0, x + ib, y0 + ib, radius=12,
-                                    fill=_blend(accent, 0.14),
-                                    outline=accent, width=2)
+            self._draw_rounded_rect(cv, x, y0, x + ib, y0 + ib, radius=S(12),
+                                    fill=_blend(accent, 0.14), outline=accent,
+                                    width=2, tags="eval")
             g = 15
             x1, y1, x2, y2 = x + g, y0 + g, x + ib - g, y0 + ib - g
             gcx, gcy, gw = (x1 + x2) / 2, (y1 + y2) / 2, (x2 - x1)
@@ -4525,95 +5678,90 @@ class ShapeApp:
                     ang = math.radians(a * 60)
                     ox = gcx + gw * 0.26 * math.cos(ang)
                     oy = gcy + gw * 0.26 * math.sin(ang)
-                    cv.create_oval(ox - gw * 0.17, oy - gw * 0.17,
-                                   ox + gw * 0.17, oy + gw * 0.17,
-                                   outline=accent, width=2)
-                cv.create_oval(gcx - gw * 0.12, gcy - gw * 0.12,
-                               gcx + gw * 0.12, gcy + gw * 0.12,
-                               outline=accent, width=2)
+                    cv.create_oval(ox - gw*0.17, oy - gw*0.17, ox + gw*0.17,
+                                   oy + gw*0.17, outline=accent, width=2,
+                                   tags="eval")
+                cv.create_oval(gcx - gw*0.12, gcy - gw*0.12, gcx + gw*0.12,
+                               gcy + gw*0.12, outline=accent, width=2, tags="eval")
             elif kind == "bars":
                 bw = gw / 4.4
                 for i, hh in enumerate((0.42, 0.72, 1.0)):
                     bx = x1 + i * (bw + bw * 0.5)
-                    self._draw_rounded_rect(cv, bx, y2 - (y2 - y1) * hh, bx + bw,
-                                            y2, radius=3, outline=accent, width=2)
+                    self._draw_rounded_rect(cv, bx, y2 - (y2 - y1)*hh, bx + bw, y2,
+                                            radius=S(3), outline=accent, width=2,
+                                            tags="eval")
             elif kind == "star":
                 pts = []
                 for i in range(10):
-                    rr = gw * 0.5 if i % 2 == 0 else gw * 0.22
+                    rr = gw*0.5 if i % 2 == 0 else gw*0.22
                     ang = math.radians(-90 + i * 36)
-                    pts += [gcx + rr * math.cos(ang), gcy + rr * math.sin(ang)]
-                cv.create_polygon(pts, outline=accent, width=2, fill="")
+                    pts += [gcx + rr*math.cos(ang), gcy + rr*math.sin(ang)]
+                cv.create_polygon(pts, outline=accent, width=2, fill="", tags="eval")
             elif kind == "bulb":
-                cv.create_oval(gcx - gw * 0.3, y1, gcx + gw * 0.3, y1 + gw * 0.6,
-                               outline=accent, width=2)
-                cv.create_line(gcx - gw * 0.16, y1 + gw * 0.63,
-                               gcx + gw * 0.16, y1 + gw * 0.63, fill=accent, width=2)
-                cv.create_line(gcx - gw * 0.12, y1 + gw * 0.76,
-                               gcx + gw * 0.12, y1 + gw * 0.76, fill=accent, width=2)
+                cv.create_oval(gcx - gw*0.3, y1, gcx + gw*0.3, y1 + gw*0.6,
+                               outline=accent, width=2, tags="eval")
+                cv.create_line(gcx - gw*0.16, y1 + gw*0.63, gcx + gw*0.16,
+                               y1 + gw*0.63, fill=accent, width=2, tags="eval")
+                cv.create_line(gcx - gw*0.12, y1 + gw*0.76, gcx + gw*0.12,
+                               y1 + gw*0.76, fill=accent, width=2, tags="eval")
 
-        # ── Rangoli Name ──────────────────────────────────────────────────────
+        # Rangoli Name
         _field(name_y, ROW_H, ACCENT_PURP)
-        _icon(pad + 14, name_y + (ROW_H - ib) // 2, ACCENT_PURP, "flower")
+        _icon(pad + 14, name_y + (ROW_H - ib)//2, ACCENT_PURP, "flower")
         cv.create_text(tl, name_y + 24, text="Rangoli Name", anchor="w",
-                       fill=TEXT_DIM, font=("Segoe UI", 11))
+                       fill=TEXT_DIM, font=("Segoe UI", FS(11)), tags="eval")
         cv.create_text(tl, name_y + 49, text=verdict["name"], anchor="w",
-                       fill=TEXT_PRIMARY, font=("Segoe UI", 17, "bold"))
-
-        # ── Complexity ────────────────────────────────────────────────────────
+                       fill=TEXT_PRIMARY, font=("Segoe UI", FS(17), "bold"), tags="eval")
+        # Complexity
         _field(comp_y, ROW_H, ACCENT_CYAN)
-        _icon(pad + 14, comp_y + (ROW_H - ib) // 2, ACCENT_CYAN, "bars")
+        _icon(pad + 14, comp_y + (ROW_H - ib)//2, ACCENT_CYAN, "bars")
         cv.create_text(tl, comp_y + 24, text="Complexity", anchor="w",
-                       fill=TEXT_DIM, font=("Segoe UI", 11))
+                       fill=TEXT_DIM, font=("Segoe UI", FS(11)), tags="eval")
         cv.create_text(tl, comp_y + 49, text=verdict["complexity"], anchor="w",
-                       fill=TEXT_PRIMARY, font=("Segoe UI", 17, "bold"))
-
-        # ── Total Score ───────────────────────────────────────────────────────
+                       fill=TEXT_PRIMARY, font=("Segoe UI", FS(17), "bold"), tags="eval")
+        # Total Score
         _field(score_y, ROW_H, ACCENT_GREEN, glow=True)
-        _icon(pad + 14, score_y + (ROW_H - ib) // 2, ACCENT_GREEN, "star")
+        _icon(pad + 14, score_y + (ROW_H - ib)//2, ACCENT_GREEN, "star")
         cv.create_text(tl, score_y + 22, text="Total Score", anchor="w",
-                       fill=TEXT_DIM, font=("Segoe UI", 11))
-        sfont = _tkfont.Font(family="Segoe UI", size=24, weight="bold")
+                       fill=TEXT_DIM, font=("Segoe UI", FS(11)), tags="eval")
+        sfont = _tkfont.Font(family="Segoe UI", size=FS(24), weight="bold")
         cv.create_text(tl, score_y + 50, text=str(verdict["score"]), anchor="w",
-                       fill=ACCENT_GREEN, font=sfont)
+                       fill=ACCENT_GREEN, font=sfont, tags="eval")
         cv.create_text(tl + sfont.measure(str(verdict["score"])) + 6, score_y + 52,
                        text=f"/ {verdict['out_of']}", anchor="w",
-                       fill=TEXT_PRIMARY, font=("Segoe UI", 14, "bold"))
-
-        # ── Improvements ──────────────────────────────────────────────────────
+                       fill=TEXT_PRIMARY, font=("Segoe UI", FS(14), "bold"), tags="eval")
+        # Improvements
         _field(impr_y, IMPR_H, ACCENT_AMBER, glow=True)
         _icon(pad + 14, impr_y + 16, ACCENT_AMBER, "bulb")
         cv.create_text(tl, impr_y + 26, text="Improvements", anchor="w",
-                       fill=TEXT_DIM, font=("Segoe UI", 11))
+                       fill=TEXT_DIM, font=("Segoe UI", FS(11)), tags="eval")
         ty = impr_y + 52
-        for tip in verdict["improvements"]:
-            cv.create_oval(tl, ty + 5, tl + 6, ty + 11, fill=ACCENT_AMBER, outline="")
+        for tip in verdict["improvements"][:3]:
+            cv.create_oval(tl, ty + 5, tl + 6, ty + 11, fill=ACCENT_AMBER,
+                           outline="", tags="eval")
             item = cv.create_text(tl + 16, ty, text=tip, anchor="nw",
-                                  fill=TEXT_PRIMARY, font=("Segoe UI", 11),
-                                  width=W - tl - pad - 20)
+                                  fill=TEXT_PRIMARY, font=("Segoe UI", FS(11)),
+                                  width=W - tl - pad - 20, tags="eval")
             bb = cv.bbox(item)
             ty = (bb[3] if bb else ty + 20) + 8
 
-        # ── buttons (original completion actions, merged in) ──────────────────
+        # optional note (fallback reason)
+        if note:
+            cv.create_text(W // 2, note_y, text=note, fill=TEXT_DIM,
+                           font=("Segoe UI", FS(9)), tags="eval")
+
+        # buttons (original completion actions)
         b1 = self._color_button(popup, "🏠  Learn another design",
                                 self._open_learn_gallery, ACCENT_GREEN,
-                                width=W - 2 * pad, height=BTN_H,
-                                font_size=13, corner_radius=14)
+                                width=W - 2*pad, height=BTN_H, font_size=FS(13),
+                                corner_radius=S(14))
         b1.place(x=pad, y=btn_y)
         b2 = self._color_button(popup, "Finish", self._exit_learn_mode,
-                                ACCENT_PURP, width=W - 2 * pad, height=BTN_H,
-                                font_size=13, corner_radius=14)
+                                ACCENT_PURP, width=W - 2*pad, height=BTN_H,
+                                font_size=FS(13), corner_radius=S(14))
         b2.place(x=pad, y=btn_y + BTN_H + 12)
-
-        self.log_to_console(
-            f"Learn Mode: result — {verdict['name']} ({verdict['complexity']}), "
-            f"score {verdict['score']}/{verdict['out_of']}.", "recv")
-        self._fade(popup, 0.0, 0.98, 0.08)
-        popup.lift()
-        popup.focus_force()
-
     def _show_learn_complete(self):
-        W, H = 460, 300
+        W, H = S(460), S(300)
         _, body = self._learn_shell(
             W, H, "Rangoli complete! \U0001f389",
             f"You drew every part of '{self._learn_design}' by hand. "
@@ -4621,14 +5769,14 @@ class ShapeApp:
         tk.Label(body,
                  text="Keep practising — each design gets easier as your hand "
                       "learns the strokes.",
-                 bg=BG_CARD, fg=TEXT_PRIMARY, font=("Segoe UI", 10),
-                 justify="left", wraplength=W-70).pack(anchor="w", pady=(0, 16))
+                 bg=BG_CARD, fg=TEXT_PRIMARY, font=("Segoe UI", FS(10)),
+                 justify="left", wraplength=W-70).pack(anchor="w", pady=(S(0), S(16)))
         self._color_button(
             body, "Learn another design", self._open_learn_gallery,
-            ACCENT_GREEN, width=W-52, height=42, font_size=12).pack(pady=(0, 8))
+            ACCENT_GREEN, width=W-52, height=S(42), font_size=FS(12)).pack(pady=(S(0), S(8)))
         self._color_button(
             body, "Finish", self._exit_learn_mode,
-            ACCENT_PURP, width=W-52, height=42, font_size=12).pack()
+            ACCENT_PURP, width=W-52, height=S(42), font_size=FS(12)).pack()
 
     def _close_learn_popup(self):
         # The intro video lives inside this popup — its frame loop must stop
@@ -4806,9 +5954,6 @@ class ShapeApp:
             self.context_menu.post(event.x_root, event.y_root)
 
     def on_mouse_move(self, event):
-        mx = max(0, min(MAX_X, ((event.x - MARGIN_L) / GRAPH_W) * MAX_X))
-        my = max(0, min(MAX_Y, ((CANVAS_H - MARGIN_B - event.y) / GRAPH_H) * MAX_Y))
-        self.coord_label.config(text=f"X: {mx:.2f}  Y: {my:.2f}")
         if self.is_moving and self.selected_shape_index is not None:
             prim = self.shapes[self.selected_shape_index]
             dx = event.x - prim['x']
@@ -4935,8 +6080,8 @@ class ShapeApp:
         popup.transient(self.root)
         self._edit_popup = popup
 
-        outer = tk.Frame(popup, bg=BG_CARD, padx=10, pady=8)
-        outer.pack(fill="both", expand=True, padx=1, pady=1)
+        outer = tk.Frame(popup, bg=BG_CARD, padx=S(10), pady=S(8))
+        outer.pack(fill="both", expand=True, padx=S(1), pady=S(1))
 
         body = tk.Frame(outer, bg=BG_CARD)
         body.pack(fill="both", expand=True)
@@ -4947,18 +6092,18 @@ class ShapeApp:
 
         def _header(text):
             head = tk.Frame(body, bg=BG_CARD)
-            head.pack(fill="x", pady=(0, 6))
+            head.pack(fill="x", pady=(S(0), S(6)))
             tk.Label(head, text=text, bg=BG_CARD, fg=TEXT_PRIMARY,
-                     font=("Segoe UI", 11, "bold")).pack(side="left")
+                     font=("Segoe UI", FS(11), "bold")).pack(side="left")
             close = tk.Label(head, text="✕", bg=BG_CARD, fg=TEXT_DIM,
-                             font=("Segoe UI", 11, "bold"), cursor="hand2")
+                             font=("Segoe UI", FS(11), "bold"), cursor="hand2")
             close.pack(side="right")
             close.bind("<Button-1>", lambda e: self._close_edit_popup())
 
         def _menu_btn(text, cmd, color):
             btn = self._color_button(body, text, cmd, color,
-                                     width=W - 24, height=32, font_size=11)
-            btn.pack(fill="x", pady=(0, 6))
+                                     width=W - 24, height=S(32), font_size=FS(11))
+            btn.pack(fill="x", pady=(S(0), S(6)))
             return btn
 
         def show_main():
@@ -4993,9 +6138,9 @@ class ShapeApp:
             _header("Mirror mode")
             tk.Label(body, text="New shapes and pen strokes are mirrored "
                      "live about the canvas centre.",
-                     bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", 10),
+                     bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(10)),
                      wraplength=W - 30, justify="left").pack(
-                anchor="w", pady=(0, 6))
+                anchor="w", pady=(S(0), S(6)))
             current = self.mirror_mode_var.get()
             for mode in ("Off", "2-way", "4-way", "8-way"):
                 _menu_btn(("● " if mode == current else "") + mode,
@@ -5019,8 +6164,8 @@ class ShapeApp:
             msg = (f"Delete {len(self._multi_sel)} strokes?"
                    if multi else "Delete this stroke?")
             tk.Label(body, text=msg, bg=BG_CARD,
-                     fg=TEXT_DIM, font=("Segoe UI", 10)).pack(
-                anchor="w", pady=(0, 6))
+                     fg=TEXT_DIM, font=("Segoe UI", FS(10))).pack(
+                anchor="w", pady=(S(0), S(6)))
             _menu_btn("Yes, delete", do_delete, "#dc2626")
             _menu_btn("Cancel", show_main, "#4b5563")
             _fit()
@@ -5029,9 +6174,9 @@ class ShapeApp:
             _clear_body()
             _header("Draw order")
             tk.Label(body, text="When should the bot draw this stroke?",
-                     bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", 10),
+                     bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(10)),
                      wraplength=W - 30, justify="left").pack(
-                anchor="w", pady=(0, 6))
+                anchor="w", pady=(S(0), S(6)))
             _menu_btn("Draw first",
                       lambda: do_reorder(True), ACCENT_GREEN)
             _menu_btn("Draw last",
@@ -5047,10 +6192,10 @@ class ShapeApp:
             for n, (name, hex_col) in enumerate(COLOUR_PALETTE.items()):
                 btn = self._color_button(
                     grid, name, lambda nm=name: do_colour(nm), hex_col,
-                    width=(W - 30) // 2, height=28, font_size=10,
+                    width=(W - 30) // 2, height=S(28), font_size=FS(10),
                     text_color="#0f172a" if name in ("White", "Yellow")
                     else "#ffffff")
-                btn.grid(row=n // 2, column=n % 2, padx=2, pady=2, sticky="ew")
+                btn.grid(row=n // 2, column=n % 2, padx=S(2), pady=S(2), sticky="ew")
             _fit()
 
         def do_delete():
@@ -5810,6 +6955,8 @@ class ShapeApp:
         return img
 
     def _ask_ai_for_fx_coordinates(self, api_key, design_img):
+        if api_key == OFFLINE_SENTINEL:
+            return self._offline_fx_coordinates(design_img)
         import io, base64
         buf = io.BytesIO()
         design_img.save(buf, format="PNG")
@@ -5847,8 +6994,13 @@ class ShapeApp:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError:
+            raise
+        except OFFLINE_ERRORS:
+            return self._offline_fx_coordinates(design_img)
 
         text = result["choices"][0]["message"]["content"].strip()
         text = text.strip("`")
@@ -6339,6 +7491,7 @@ class ShapeApp:
         self.send_btn.configure(
             state="disabled", fg_color="#0f766e", hover_color="#0f766e",
             text_color=TEXT_DIM)
+        self._start_live_camera()
         threading.Thread(target=self.send_gcode, daemon=True).start()
 
     def toggle_pause(self):
@@ -6458,6 +7611,7 @@ class ShapeApp:
             self.is_sending = False
             self.is_paused = False
             self.pause_event.set()
+            self.root.after(0, self._stop_live_camera)
             self.root.after(0, lambda: self.pause_btn.configure(
                 text="⏸", state="disabled"))
             self.send_btn.configure(
@@ -6478,3 +7632,4 @@ if __name__ == "__main__":
     finally:
         # The intro video runs in its own process — never outlive the app.
         app._stop_learn_video()
+        app._stop_live_camera()

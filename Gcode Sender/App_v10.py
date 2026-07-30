@@ -77,54 +77,91 @@ LEARN_VIDEO_FILE = os.path.join(_APP_DIR, "learn_intro.mov")
 # remember the choice. The capture itself runs off whatever this installs.
 CAMERA_CONFIG_FILE = os.path.join(_APP_DIR, "camera_config.json")
 LEARN_PHOTO_DIR    = os.path.join(_APP_DIR, "learn_photos")
-
-# Every scored Learn Mode attempt is appended here, so the app can show that a
-# learner is actually improving rather than just that they used it once. This
-# is the evidence behind the Progress & Impact dashboard.
-LEARN_PROGRESS_FILE = os.path.join(_APP_DIR, "learn_progress.json")
-
-# A design counts as "mastered" once an attempt at it scores this or better.
-MASTERY_SCORE = 8
 CAMERA_PROBE_COUNT = 6      # device indices tried by a scan (0 … N-1)
 CAMERA_WARMUP_FRAMES = 3    # USB webcams hand back a black first frame or two
 
-# ── USB auto-connect ────────────────────────────────────────────────────────
-# The rangoli maker is a GRBL controller on a USB-serial bridge. Rather than
-# make the operator hunt for the right port in a dropdown, every plausible
-# candidate is ranked and then *proved* by opening it and listening for GRBL's
-# greeting. Ranking alone isn't enough — a laptop can easily have several
-# USB-serial adapters — so the handshake is what actually confirms the robot.
+# Learn Mode remembers how good the child has actually got. The profile holds
+# every scored attempt plus the level derived from them, so difficulty carries
+# over between runs instead of restarting at "hold my hand" every session.
+# Deliberately a separate file from App_v10's learn_progress.json: that one is
+# the Progress & Impact history and has its own schema, and two apps rewriting
+# one file would each silently drop the other's keys.
+LEARNER_PROFILE_FILE = os.path.join(_APP_DIR, "learner_profile.json")
 
-# USB vendor IDs of the bridges these boards ship with.
-CONTROLLER_VIDS = {
-    0x2341,   # Arduino SA (Uno / Mega / Nano 33)
-    0x2A03,   # Arduino.org
-    0x1A86,   # QinHeng CH340 / CH341  (most clone Unos)
-    0x0403,   # FTDI FT232
-    0x10C4,   # Silicon Labs CP210x
-    0x1B4F,   # SparkFun
-    0x16C0,   # Teensy / Van Ooijen
-    0x0483,   # STMicroelectronics
+# ── Kid Mode ───────────────────────────────────────────────────────────────
+# A cartoon skin over Learn Mode for roughly ages 7-12: bright card, chunky
+# buttons, a peacock mascot that reacts, a powder-bottle character walking the
+# simulated line, confetti on a finished part, and stickers/streaks instead of a
+# bare score. Deliberately scoped to Learn Mode and stored in its own file, so
+# flipping it changes nothing about the machine, the canvas, the G-code or any
+# other setting: the same install is a game for a child and stays exactly as it
+# was for an elder using Pulli Mode.
+KID_MODE_CONFIG_FILE = os.path.join(_APP_DIR, "kid_mode_config.json")
+
+KID_THEME = {
+    "card":    "#fffaf0",   # warm cream instead of near-black
+    "input":   "#ffe9c7",
+    "ink":     "#4a3728",   # soft dark brown reads friendlier than white
+    "dim":     "#9c8776",
+    "canvas":  "#fffdf8",
+    "outline": "#ff8fab",
+    "cheer":   "#22c55e",
+    "oops":    "#f59e0b",
 }
+# Tried in order; the first family actually installed wins. Comic Sans is the
+# obvious kid face on Windows, but never assume a font exists — an unavailable
+# family silently falls back to something arbitrary and can break layout.
+KID_FONT_CANDIDATES = ["Comic Sans MS", "Chalkboard SE", "Baloo 2",
+                       "Segoe Print", "Verdana", "Segoe UI"]
+KID_CONFETTI_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e",
+                       "#3b82f6", "#a855f7", "#ec4899", "#22d3ee"]
+KID_SPARKLE_COLORS  = ["#fde047", "#fca5a5", "#a5f3fc", "#d8b4fe", "#bbf7d0"]
+KID_MAX_SPARKLES    = 26        # older sparkles are culled so the canvas stays light
 
-# Device-node spellings that mean "USB serial" on each platform. macOS names
-# CDC-ACM boards /dev/tty.usbmodemXXXX, which is the "usb modem" the operator
-# sees; Linux uses ttyACM/ttyUSB.
-SERIAL_NAME_HINTS = ("usbmodem", "usbserial", "wchusbserial", "ttyacm",
-                     "ttyusb", "slab_usbtouart")
+# Stars are the child-facing form of the AI score. Same number underneath — the
+# real score stays on the card so an adult can still read it.
+KID_STAR_THRESHOLDS = [2, 4, 6, 8, 9]   # score >= t earns that many stars
 
-# Free-text matches on the description/manufacturer strings pyserial exposes.
-SERIAL_DESC_HINTS = ("arduino", "ch340", "ch341", "wch", "ftdi", "ft232",
-                     "cp210", "silicon labs", "usb serial", "usb-serial",
-                     "grbl", "cnc")
+# Stickers. Every rule is checked against the learner profile, so a sticker is
+# only ever shown as earned when the evidence for it is actually on disk.
+KID_BADGES = [
+    {"key": "first",    "icon": "🌸", "name": "First Rangoli",
+     "how": "Finish your first rangoli."},
+    {"key": "steady",   "icon": "✋", "name": "Steady Hand",
+     "how": "Score 9 or more on any rangoli."},
+    {"key": "symmetry", "icon": "🦋", "name": "Symmetry Star",
+     "how": "Score 8+ on three symmetry challenges."},
+    {"key": "oneline",  "icon": "🪄", "name": "One-Line Wizard",
+     "how": "Find a rangoli that draws in one unbroken line."},
+    {"key": "pulli",    "icon": "🎯", "name": "Pulli Pro",
+     "how": "Reach Level 5 — the robot lays only dots."},
+    {"key": "streak",   "icon": "🔥", "name": "Week Warrior",
+     "how": "Practise on 7 different days in a row."},
+]
 
-# Never touch these: probing opens the port, and on a Bluetooth or console
-# node that either hangs or is simply pointless.
-SERIAL_EXCLUDE_HINTS = ("bluetooth", "debug-console", "/dev/cu.debug",
-                        "wireless", "irda")
+# ── Language / translation ──────────────────────────────────────────────
+# UI strings are written in English in the source and machine-translated on
+# demand (Google's public "translate_a/single" endpoint — no API key, same
+# unauthenticated call googletrans wraps). Translations are cached to disk
+# forever: once a string has been seen in a language it never needs the
+# network again, and the app still works offline after the first run.
+# The debug Log panel is deliberately never routed through tr() — log lines
+# are diagnostic/technical and stay in English regardless of UI language.
+LANGUAGE_CONFIG_FILE    = os.path.join(_APP_DIR, "language_config.json")
+TRANSLATION_CACHE_FILE  = os.path.join(_APP_DIR, "translation_cache.json")
 
-GRBL_PROBE_TIMEOUT = 3.0    # seconds spent listening for GRBL's greeting
-AUTO_CONNECT_POLL_MS = 1000 # how often the port list is re-examined
+LANGUAGES = {
+    "en":  "English",
+    "hi":  "हिंदी",
+    "kn":  "ಕನ್ನಡ",
+    "ta":  "தமிழ்",
+    "te":  "తెలుగు",
+    "ml":  "മലയാളം",
+    "bn":  "বাংলা",
+    "mr":  "मराठी",
+    "gu":  "ગુજરાતી",
+    "gom": "कोंकणी",
+}
 
 RANGOLI_IMAGE_PROMPTS = [
     "Generate a completely original rangoli in the style of a classic "
@@ -952,6 +989,131 @@ LEARN_STEP_SETS = [
     ],
 ]
 
+# Kid Mode copy for the same six step sets — same instruction, small words, and
+# the bottle is a "magic bottle". Index-for-index with LEARN_STEP_SETS so
+# _learn_step_instructions can swap between them without any other change.
+LEARN_STEP_SETS_KID = [
+    [
+        "Look at the bright shape the robot just drew — that's the one you copy!",
+        "Start at the bit closest to you. Hold your magic bottle just above "
+        "the floor.",
+        "Squeeze slowly and go all the way round in one go — no stopping!",
+        "Keep your line skinny, not fat. Go extra slow on the bendy bits.",
+        "Stop squeezing BEFORE you lift up, or you'll get a big blob.",
+    ],
+    [
+        "This bit is a petal — fat in the middle, pointy at both ends.",
+        "Put a dot on each pointy end first, so you know where to aim.",
+        "Draw one curvy side, then the other curvy side to close it up.",
+        "Hold your bottle the same height as before so the lines match.",
+        "Brush away any stray powder that escaped outside the petal.",
+    ],
+    [
+        "This bit is a circle — the trick is to swing your whole arm round.",
+        "Plant your elbow on the floor and swoosh round in one smooth move.",
+        "Go slow! Circles show every wobble, so steady beats speedy.",
+        "Overlap the powder a tiny bit where the circle joins up — no gaps.",
+        "Check it's the same all the way round before you refill.",
+    ],
+    [
+        "This bit is straight lines. Line your start point up with the robot's.",
+        "Pull each line towards you — pulling is way steadier than pushing.",
+        "Squeeze the same amount the whole way so the line doesn't go faint.",
+        "Lift up cleanly at the end of each line to keep the corners sharp.",
+        "Space them out evenly — peek at the robot's ones to compare.",
+    ],
+    [
+        "This is a tiny detail bit — use a bottle with a smaller nozzle if "
+        "you have one.",
+        "Do little short squeezes instead of one big long pour.",
+        "Rest your pinky finger on a clean bit of floor to steady your hand.",
+        "Build it up bit by bit — you can always add powder, never take it away.",
+        "Take your time. The tiny bits are what make people go wow!",
+    ],
+    [
+        "This bit joins everything together — connect it neatly to your other bits.",
+        "Follow the robot's line closely so the whole rangoli stays even.",
+        "Go over any thin or gappy spots with a second gentle squeeze.",
+        "Keep your hands off the finished bits so nothing gets smudged.",
+        "Done? Tap the loose powder off your fingers before the next bit.",
+    ],
+]
+
+# ── Learn Mode: progressive difficulty ─────────────────────────────────────
+# The robot's share of the work shrinks as the child gets better. Level 1 is
+# mostly demonstration — the robot draws about seven parts in ten and the child
+# copies the rest. By Level 5 the robot has stopped drawing lines altogether
+# and only lays the pulli (the dot scaffold), which is exactly how an
+# experienced hand works: grandma doesn't need the lines drawn for her, she
+# needs the dots put down. So graduating out of Learn Mode is not a certificate
+# screen, it IS Pulli Mode — the child ends up in the same mode as grandma.
+LEARN_LEVELS = {
+    1: {"robot_share": 0.70, "title": "Follow along",
+        "blurb": "The robot draws most of the parts — you copy them."},
+    2: {"robot_share": 0.55, "title": "Take a turn",
+        "blurb": "Just over half the parts are still the robot's."},
+    3: {"robot_share": 0.40, "title": "Even hands",
+        "blurb": "You now draw more of the rangoli than the robot does."},
+    4: {"robot_share": 0.20, "title": "Almost on your own",
+        "blurb": "The robot only demonstrates the few hardest parts."},
+    5: {"robot_share": 0.00, "title": "Pulli Mode", "pulli": True,
+        "blurb": "The robot lays only the dots. Every line is yours — "
+                 "the way grandma does it."},
+}
+LEARN_MAX_LEVEL = 5
+
+# A level only moves on evidence: LEARN_LEVEL_WINDOW consecutive attempts at
+# the current level, all judged by the vision model. Scores are normalised to
+# a 0-10 scale before they are compared with these thresholds.
+LEARN_LEVEL_WINDOW  = 2
+LEARN_PROMOTE_SCORE = 8.0   # every attempt in the window at/above this → up
+LEARN_DEMOTE_SCORE  = 5.0   # every attempt in the window below this   → down
+
+# Pulli Mode scaffold: dots sampled along each part of the design, so the child
+# is connecting dots that belong to the rangoli they chose rather than a
+# generic lattice. Capped so a 9-part design doesn't turn into a dot storm.
+PULLI_DOTS_PER_PART = 6
+PULLI_MAX_DOTS      = 48
+
+# ── Learn Mode: symmetry challenges ────────────────────────────────────────
+# The classroom finding this answers: the children could *see* the symmetry in a
+# rangoli but couldn't draw it. Recognising a mirror line is not the same skill
+# as producing one freehand, and drawing a whole design never isolates it —
+# a wobbly petal and a wobbly reflection look the same on the mat.
+#
+# So this lesson type isolates it. The robot draws only what falls inside one
+# fundamental domain of the design (the left half, or a quadrant, or an octant),
+# and the child draws the reflections. The mirror lines are shown on screen and
+# the target halves are ghosted in, so the child can see exactly what "mirrored"
+# should look like while their hand tries to do it. The reflections come from the
+# same _mirror_transforms engine the pen tool's mirror mode uses.
+#
+# How many axes the child completes scales with the level from item 5: one
+# mirror line while they are learning, the full eightfold kolam symmetry by the
+# time they reach Pulli Mode.
+LEARN_SYMMETRY_BY_LEVEL = {
+    1: "2-way", 2: "2-way", 3: "4-way", 4: "4-way", 5: "8-way",
+}
+LEARN_SYMMETRY_LABELS = {
+    "2-way": "one mirror line",
+    "4-way": "two mirror lines",
+    "8-way": "four mirror lines",
+}
+# Parts whose clipped half is shorter than this fraction of the design's extent
+# are slivers — not worth a turn of their own.
+LEARN_SYM_MIN_LEN_FRAC = 0.04
+LEARN_SYM_MAX_PAIRS    = 4      # keep one challenge to a few focused halves
+
+# ── Learn Mode: one-continuous-line (sikku) visualisation ──────────────────
+# Stroke endpoints closer together than this fraction of the design's extent are
+# the same junction. Two strokes meeting at a petal tip are one vertex even when
+# their float coordinates differ in the last decimals, and the Euler test is
+# entirely a question of what counts as the same vertex.
+SIKKU_WELD_FRAC = 0.02
+# A dot counts as "passed" once the pen comes this close, as a fraction of the
+# preview's dot spacing.
+SIKKU_DOT_HIT_FRAC = 0.9
+
 # ── Ratio-based UI scaling ──────────────────────────────────────────────────
 # Every fixed pixel size below (popup dimensions, fonts, padding, corner
 # radii, button widths...) was measured against a 2560x1600 reference
@@ -996,6 +1158,10 @@ class ShapeApp:
         self.root.bind("<Escape>", lambda e: self.root.attributes("-fullscreen", False))
         self.root.configure(bg=BG_DARK)
 
+        self._translation_cache = self._load_translation_cache()
+        self.current_lang = self._load_language_pref()
+        self._translatable_widgets = []  # [(widget, kwarg, english_text), ...]
+
         global GRAPH_W, GRAPH_H, CANVAS_W, CANVAS_H, UI_SCALE
         global MARGIN_L, MARGIN_R, MARGIN_T, MARGIN_B
         screen_h = self.root.winfo_screenheight()
@@ -1036,17 +1202,6 @@ class ShapeApp:
         self.size_val             = tk.IntVar(value=50)
         self.is_moving            = False
         self.last_ports           = []
-
-        # ── USB auto-connect ────────────────────────────────────────────────
-        self._connected_port  = None   # device proved to be the rangoli maker
-        self._conn_state      = "none" # none | searching | connected | unverified
-        self._conn_detail     = ""
-        self._conn_lbl        = None   # banner status chip
-        self._conn_settings_lbl = None # same status, inside Settings
-        self._probe_cache     = {}     # device -> did it answer as GRBL?
-        self._probing         = False  # a handshake thread is running
-        self._port_info       = {}     # device -> pyserial ListPortInfo
-
         self.is_sending           = False
         self.is_paused            = False
         self.cancel_requested     = False
@@ -1104,8 +1259,53 @@ class ShapeApp:
         self._learn_video_delay     = 40.0   # ms between frames (from the fps)
         self._learn_design    = None      # name of the design being learned
         self._learn_parts     = []        # design decomposed into parts (paths)
-        # Student and robot split the design and work in parallel: the student
-        # takes the even-numbered parts, the robot the odd-numbered ones.
+        # Who draws which part is not a fixed alternation any more — it comes
+        # from the learner's level (see LEARN_LEVELS and _learn_build_plan).
+        self._learn_owner     = {}        # part index → "robot" | "student"
+        self._learn_center    = (MARGIN_L + GRAPH_W // 2,
+                                 MARGIN_T + GRAPH_H // 2)
+        self._learn_dots      = []        # Pulli Mode: the dot scaffold, if any
+        self._learn_dots_laid = False     # the scaffold is down on the mat
+        # Lesson type: "full" walks the whole design, "symmetry" drills mirror
+        # lines only (see LEARN_SYMMETRY_BY_LEVEL).
+        self._learn_lesson    = "full"
+        self._learn_sym_mode  = "2-way"
+        self._learn_sym_pairs = []        # [{part, robot, target}, …]
+        self._learn_sym_idx   = 0         # which challenge is on screen
+        self._learn_sym_runs  = []        # preview-space runs being traced
+
+        # ── Learn Mode: one-continuous-line (sikku) visualisation ───────────
+        self._sikku_g         = None      # the analysed multigraph
+        self._sikku_trails    = []        # the route, as continuous trails
+        self._sikku_frames    = []        # pen frames in preview space
+        self._sikku_i         = 0
+        self._sikku_last      = None
+        self._sikku_lifts     = 0
+        self._sikku_running   = False
+        self._sikku_after     = None
+        self._sikku_prev      = None      # the visualisation canvas
+        self._sikku_tf        = None
+        self._sikku_dots      = []        # pulli in preview space
+        self._sikku_dots_hit  = set()     # indices the line has reached
+        self._sikku_dot_r     = 6.0
+        self._sikku_counter   = None      # the live counter label
+        self._sikku_play_btn  = None
+
+        # ── Kid Mode ────────────────────────────────────────────────────────
+        self.kid_mode      = False        # cartoon skin over Learn Mode
+        self.kid_sounds    = False        # muted by default, on purpose
+        self._kid_font     = None         # resolved playful family (lazy)
+        self._kid_mascot   = None         # mascot canvas of the open popup
+        self._kid_mascot_after = None
+        self._kid_mascot_mood  = "idle"
+        self._kid_mascot_phase = 0
+        self._kid_bubble   = None         # mascot speech-bubble label
+        self._kid_glass    = None         # open Learn popup's backdrop canvas
+        self._kid_confetti = []           # live confetti particles
+        self._kid_confetti_after = None
+        self._kid_sparkles = []           # live sparkle item ids (capped)
+        self._kid_oneline_solved = []     # designs proven to be one line
+        self._load_kid_mode_config()
         self._learn_student_idx = None    # part the student is drawing now
         self._learn_robot_idx   = None    # part the robot is drawing now
         self._learn_done_parts  = set()   # indices finished by either of them
@@ -1118,6 +1318,12 @@ class ShapeApp:
         self._learn_anim_id   = None      # after-id of the running preview draw
         self._learn_status    = None      # "what the robot is doing" label
 
+        # ── Learn Mode: persisted learner profile ───────────────────────────
+        self._learn_level     = 1         # 1 … LEARN_MAX_LEVEL
+        self._learn_sessions  = []        # every recorded attempt, oldest first
+        self._learn_level_note = None     # "moved up to Level 3" for the result
+        self._load_learner_profile()
+
         # ── Learn Mode: USB camera (install half only — no camera on the rig)
         self._camera_index    = None      # device index of the installed camera
         self._camera_name     = None      # friendly label shown in the UI
@@ -1127,17 +1333,6 @@ class ShapeApp:
         self._camera_list     = None      # frame the scan results land in
         self._learn_photo_path = None     # last photo taken of the real mat
         self._load_camera_config()
-
-        # ── Progress & Impact: scored-attempt history ────────────────────
-        self._progress          = {"version": 1, "last_learner": "",
-                                   "sessions": []}
-        self._learn_learner     = ""      # who is practising right now
-        self._progress_popup    = None
-        self._progress_filter   = None    # learner shown in the dashboard
-        self._progress_body     = None    # dashboard's repaintable content frame
-        self._progress_imgs     = []      # PhotoImages the dashboard must keep
-        self._learn_recorded_for = None   # eval popup already written to disk
-        self._load_learn_progress()
 
         # ── Live camera panel: shows the installed camera's feed while the
         # robot is drawing, floating over the canvas. ─────────────────────
@@ -1421,16 +1616,21 @@ class ShapeApp:
             top_right, "Features", self._open_features_popup,
             "#0d9488", width=S(70), height=S(40), font_size=FS(12))
         self.features_btn.pack(side="left", padx=(S(0), S(8)))
+        self.register_translatable(self.features_btn, "Features")
 
         self.simulate_btn = self._color_button(
             top_right, "\u25b6 Simulate", self.simulate_pattern, ACCENT_AMBER,
             width=S(130), height=S(40), font_size=FS(12))
         self.simulate_btn.pack(side="left", padx=(S(0), S(8)))
+        self.register_translatable(self.simulate_btn, "Simulate",
+                                    fmt=lambda t: f"\u25b6 {t}")
 
         self.ai_fx_btn = self._color_button(
             top_right, "\u2728 AI Enhance", self.toggle_ai_effects, ACCENT_PURP,
             width=S(140), height=S(40), font_size=FS(12))
         self.ai_fx_btn.pack(side="left")
+        self.register_translatable(self.ai_fx_btn, "AI Enhance",
+                                    fmt=lambda t: f"\u2728 {t}")
         self._sim_running = False
 
         # Bottom: Size + Multi-colour (+ colour/part pickers)
@@ -1438,8 +1638,10 @@ class ShapeApp:
 
         size_frame = tk.Frame(bottom_ov, bg=panel_bg)
         size_frame.pack(side="left", padx=(S(0), S(12)))
-        tk.Label(size_frame, text="Size:", bg=panel_bg, fg=ACCENT_CYAN,
-                 font=("Segoe UI", FS(10), "bold")).pack(side="left", padx=(S(0), S(6)))
+        size_lbl = tk.Label(size_frame, text="Size:", bg=panel_bg, fg=ACCENT_CYAN,
+                 font=("Segoe UI", FS(10), "bold"))
+        size_lbl.pack(side="left", padx=(S(0), S(6)))
+        self.register_translatable(size_lbl, "Size", fmt=lambda t: f"{t}:")
         self.size_slider = ctk.CTkSlider(
             size_frame, from_=1, to=800, variable=self.size_val,
             command=self._on_slider, width=S(200), height=S(18),
@@ -1459,11 +1661,14 @@ class ShapeApp:
             text_color="#9d174d", font=("Segoe UI", FS(11), "bold"),
             bg_color=panel_bg, width=S(48), height=S(22))
         self.multi_colour_switch.pack(side="left", padx=(S(0), S(10)))
+        self.register_translatable(self.multi_colour_switch, "Multi-colour")
 
         colour_row = tk.Frame(bottom_ov, bg=panel_bg)
         colour_row.pack(side="left")
-        tk.Label(colour_row, text="Colour:", bg=panel_bg, fg=ACCENT_PINK,
-                 font=("Segoe UI", FS(10), "bold")).pack(side="left", padx=(S(0), S(4)))
+        colour_lbl = tk.Label(colour_row, text="Colour:", bg=panel_bg, fg=ACCENT_PINK,
+                 font=("Segoe UI", FS(10), "bold"))
+        colour_lbl.pack(side="left", padx=(S(0), S(4)))
+        self.register_translatable(colour_lbl, "Colour", fmt=lambda t: f"{t}:")
         # CTkComboBox splits itself at (width - height): the left section is
         # outlined in border_color, but the right section holding the dropdown
         # arrow is outlined in button_color. With a pink border that made the
@@ -1490,6 +1695,7 @@ class ShapeApp:
         self.part_label = tk.Label(
             colour_row, text="  Part:", bg=panel_bg, fg=ACCENT_PURP,
             font=("Segoe UI", FS(10), "bold"))
+        self.register_translatable(self.part_label, "Part", fmt=lambda t: f"  {t}:")
         self.part_select_var = tk.StringVar(value="Whole shape")
         self.part_combo = ctk.CTkComboBox(
             colour_row, variable=self.part_select_var, values=self._PART_OPTIONS,
@@ -1509,6 +1715,8 @@ class ShapeApp:
         self.colour_emptied_btn.place(relx=0.0, rely=0.0, anchor="nw",
                                       x=S(8), y=S(8))
         self.colour_emptied_btn.lift()
+        self.register_translatable(self.colour_emptied_btn, "Emptied",
+                                    fmt=lambda t: f"\U0001f3a8 {t}")
         self.colour_emptied_btn.configure(
             state="disabled", fg_color="#4b5563", hover_color="#4b5563",
             text_color=TEXT_DIM)
@@ -1561,19 +1769,13 @@ class ShapeApp:
             controls, "</> Debug Log", self._on_debug_log_click,
             "#1e293b", width=S(118), height=S(36), font_size=FS(11), corner_radius=S(10))
         self.debug_log_btn.pack(side="left", padx=(S(0), S(8)))
+        self.register_translatable(self.debug_log_btn, "Debug Log",
+                                    fmt=lambda t: f"</> {t}")
 
         self.settings_btn = self._color_button(
             controls, "⚙", self._open_settings_popup, "#1e293b",
             width=S(40), height=S(36), font_size=FS(15), corner_radius=S(18))
         self.settings_btn.pack(side="left")
-
-        # Live USB auto-connect status. Click it to forget the handshake
-        # results and hunt for the robot again.
-        self._conn_lbl = tk.Label(
-            controls, text="○ No robot found", bg="#000000", fg=TEXT_DIM,
-            font=("Segoe UI", FS(10), "bold"), cursor="hand2")
-        self._conn_lbl.pack(side="left", padx=(S(12), S(0)))
-        self._conn_lbl.bind("<Button-1>", lambda e: self._rescan_ports())
 
         icon_side = S(34)
         icon_c = tk.Canvas(center, width=icon_side, height=icon_side,
@@ -1687,10 +1889,10 @@ class ShapeApp:
             glass, 4, 4, W - 4, H - 4, radius=S(22),
             fill=BG_CARD, outline=GLASS_BORDER, width=1)
         glass.create_text(
-            28, 30, text="Choose a design", anchor="w",
+            28, 30, text=self.tr("Choose a design"), anchor="w",
             fill=TEXT_PRIMARY, font=("Segoe UI", FS(15), "bold"))
         glass.create_text(
-            28, 54, text="Pick how you want to start your rangoli.",
+            28, 54, text=self.tr("Pick how you want to start your rangoli."),
             anchor="w", fill=TEXT_DIM, font=("Segoe UI", FS(9)))
         # Decorative only — never steal clicks from the buttons below.
         glass.bind("<Button-1>", lambda e: "break")
@@ -1732,26 +1934,26 @@ class ShapeApp:
                 continue
             row = tk.Frame(body, bg=BG_CARD)
             row.pack(fill="x", pady=(S(0), S(12)))
-            tk.Label(row, text=label, bg=BG_CARD, fg=TEXT_PRIMARY,
+            tk.Label(row, text=self.tr(label), bg=BG_CARD, fg=TEXT_PRIMARY,
                      font=("Segoe UI", FS(12), "bold")).pack(side="left")
 
             if label == "Import Designs":
-                self._small_btn(row, "Browse",
+                self._small_btn(row, self.tr("Browse"),
                                  _pick(self.import_design),
                                  ACCENT_AMBER, "#b45309")
             elif label == "AI Generated":
-                self._small_btn(row, "Generate",
+                self._small_btn(row, self.tr("Generate"),
                                  _pick(self.generate_ai_design),
                                  ACCENT_PURP, "#8b5cf6")
             elif label == "Pre-designed":
-                self._small_btn(row, "Gallery",
+                self._small_btn(row, self.tr("Gallery"),
                                  _pick(self._open_gallery),
                                  ACCENT_BLUE, "#3b82f6")
 
         # Draw it yourself — the pen tool used to sit on the canvas toolbar.
         pen_row = tk.Frame(body, bg=BG_CARD)
         pen_row.pack(fill="x", pady=(S(0), S(12)))
-        tk.Label(pen_row, text="Freehand Pen", bg=BG_CARD, fg=TEXT_PRIMARY,
+        tk.Label(pen_row, text=self.tr("Freehand Pen"), bg=BG_CARD, fg=TEXT_PRIMARY,
                  font=("Segoe UI", FS(12), "bold")).pack(side="left")
         self.pen_btn = self._small_btn(
             pen_row, self._pen_btn_label(), _pick(self.toggle_pen_mode),
@@ -1779,13 +1981,129 @@ class ShapeApp:
         except Exception: pass
         self._design_options_popup = None
 
+    # ── Language / i18n ──────────────────────────────────────────────────
+    def _load_language_pref(self):
+        try:
+            with open(LANGUAGE_CONFIG_FILE, "r", encoding="utf-8") as f:
+                code = json.load(f).get("lang", "en")
+        except Exception:
+            return "en"
+        return code if code in LANGUAGES else "en"
+
+    def _save_language_pref(self, code):
+        try:
+            with open(LANGUAGE_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump({"lang": code}, f)
+        except Exception:
+            pass
+
+    def _load_translation_cache(self):
+        try:
+            with open(TRANSLATION_CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_translation_cache(self):
+        try:
+            with open(TRANSLATION_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(self._translation_cache, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _gtranslate(self, text, lang):
+        """One string, English -> `lang`, via Google's public translate
+        endpoint (no key needed — the same unauthenticated call the
+        `googletrans` library wraps). Returns None on any failure (offline,
+        endpoint shape changed, etc.) so callers can fall back to English."""
+        try:
+            import urllib.parse
+            url = ("https://translate.googleapis.com/translate_a/single"
+                   "?client=gtx&sl=en&tl=" + urllib.parse.quote(lang) +
+                   "&dt=t&q=" + urllib.parse.quote(text))
+            with urllib.request.urlopen(url, timeout=6) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            return "".join(chunk[0] for chunk in data[0] if chunk[0])
+        except Exception as e:
+            if not getattr(self, "_translate_fail_logged", False):
+                self._translate_fail_logged = True
+                self.log_to_console(
+                    f"Language: couldn't reach the translation service "
+                    f"({e}). Showing English for anything not already "
+                    f"cached in translation_cache.json.", "info")
+            return None
+
+    def tr(self, text):
+        """Translate a UI string into the currently selected language.
+        English (the default / fallback) returns the text unchanged.
+        Results are cached to disk per-language so repeat strings (and
+        repeat runs) never re-hit the network. Never use this for Log
+        panel messages — those stay in English by design."""
+        if not text or self.current_lang == "en":
+            return text
+        lang_cache = self._translation_cache.setdefault(self.current_lang, {})
+        if text in lang_cache:
+            return lang_cache[text]
+        translated = self._gtranslate(text, self.current_lang)
+        if translated is None:
+            return text
+        lang_cache[text] = translated
+        self._save_translation_cache()
+        return translated
+
+    def register_translatable(self, widget, english_text, kwarg="text", fmt=None):
+        """Track a widget/kwarg so `_refresh_translatable_widgets` can
+        re-apply the right translation after the user switches language,
+        without having to rebuild the whole window. `fmt`, if given, wraps
+        the translated word (e.g. to keep a leading icon glyph out of the
+        machine-translation call: fmt=lambda t: f"▶ {t}")."""
+        value = self.tr(english_text)
+        widget.configure(**{kwarg: fmt(value) if fmt else value})
+        self._translatable_widgets.append((widget, kwarg, english_text, fmt))
+        return widget
+
+    def _refresh_translatable_widgets(self):
+        alive = []
+        for widget, kwarg, english_text, fmt in self._translatable_widgets:
+            try:
+                value = self.tr(english_text)
+                widget.configure(**{kwarg: fmt(value) if fmt else value})
+                alive.append((widget, kwarg, english_text, fmt))
+            except tk.TclError:
+                pass  # widget was destroyed since it registered
+        self._translatable_widgets = alive
+
+    def _on_language_select(self, native_name):
+        for code, name in LANGUAGES.items():
+            if name == native_name:
+                self._set_language(code)
+                return
+
+    def _set_language(self, code):
+        if code not in LANGUAGES or code == self.current_lang:
+            return
+        self.current_lang = code
+        self._save_language_pref(code)
+        self._refresh_translatable_widgets()
+        # Popups build their text at open-time from self.tr(), so the
+        # simplest correct "immediate" update for them is: close, reopen.
+        if self._settings_popup is not None:
+            self._open_settings_popup()
+        if self._features_popup is not None:
+            self._open_features_popup()
+        if self._design_options_popup is not None:
+            self._open_design_options_popup()
+
     # ── NEW: Settings popup (Connection / Speed / Robot Test) ──────────────
     def _open_settings_popup(self):
         self._close_settings_popup()
         self.root.update_idletasks()
-        W, H = S(400), S(512)
+        # Two Kid Mode rows were added below, so the card is taller — clamped to
+        # the screen so it can't run off the bottom on a small display.
+        W = S(400)
+        H = min(S(724), self.root.winfo_screenheight() - S(40))
         sx = self.root.winfo_screenwidth()  // 2 - W // 2
-        sy = self.root.winfo_screenheight() // 2 - H // 2
+        sy = max(S(10), self.root.winfo_screenheight() // 2 - H // 2)
 
         popup = tk.Toplevel(self.root)
         popup.overrideredirect(True)
@@ -1801,7 +2119,7 @@ class ShapeApp:
         glass.pack(fill="both", expand=True)
         self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=S(20),
                                 fill=BG_CARD, outline=ACCENT_PURP, width=2)
-        glass.create_text(24, 26, text="Settings", anchor="w",
+        glass.create_text(24, 26, text=self.tr("Settings"), anchor="w",
                           fill=TEXT_PRIMARY, font=("Segoe UI", FS(14), "bold"))
 
         close_lbl = tk.Label(popup, text="\u2715", bg=BG_CARD, fg=TEXT_DIM,
@@ -1812,54 +2130,52 @@ class ShapeApp:
         body = tk.Frame(popup, bg=BG_CARD)
         body.place(x=20, y=54, width=W-40, height=H-74)
 
-        rows = {}
-
         def _row(label_text, sub_text=None):
             row_outer = tk.Frame(body, bg=BG_CARD)
             row_outer.pack(fill="x", pady=(S(0), S(14)))
             top = tk.Frame(row_outer, bg=BG_CARD)
             top.pack(fill="x")
-            tk.Label(top, text=label_text, bg=BG_CARD, fg=TEXT_PRIMARY,
+            tk.Label(top, text=self.tr(label_text), bg=BG_CARD, fg=TEXT_PRIMARY,
                      font=("Segoe UI", FS(12), "bold")).pack(side="left")
             select_slot = tk.Frame(top, bg=BG_CARD)
             select_slot.pack(side="right")
             if sub_text:
-                tk.Label(row_outer, text=sub_text, bg=BG_CARD, fg=TEXT_DIM,
+                tk.Label(row_outer, text=self.tr(sub_text), bg=BG_CARD, fg=TEXT_DIM,
                          font=("Segoe UI", FS(9)), wraplength=W-60,
                          justify="left").pack(anchor="w", pady=(S(2), S(0)))
-            rows[label_text] = row_outer
             return select_slot
 
-        # 1) Connection — found automatically; the dropdown is an override
-        slot = _row("Connection",
-                    "The robot is detected automatically over USB. Pick a "
-                    "port here only if you need to override it.")
+        # 0) Language — pick the UI language; everything except the Log
+        # panel switches immediately.
+        slot = _row("Language", "Translate the app's text. The Log panel always stays in English.")
+        self._lang_name_var = tk.StringVar(value=LANGUAGES[self.current_lang])
+        lang_combo = ctk.CTkComboBox(
+            slot, variable=self._lang_name_var, values=list(LANGUAGES.values()),
+            state="readonly", width=S(170), fg_color=BG_INPUT, border_color=GLASS_EDGE,
+            button_color=GLASS_EDGE, button_hover_color=ACCENT_AMBER,
+            text_color=TEXT_PRIMARY, dropdown_fg_color=BG_CARD,
+            dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", FS(11)),
+            command=self._on_language_select)
+        lang_combo.pack(side="right")
+
+        # 1) Connection — select a serial port
+        slot = _row("Connection", "Choose the serial port your robot is connected on.")
         current_ports = [p.device for p in serial.tools.list_ports.comports()]
         self.port_combo = ctk.CTkComboBox(
             slot, variable=self.port_var, values=current_ports, state="readonly",
             width=S(170), fg_color=BG_INPUT, border_color=GLASS_EDGE,
             button_color=GLASS_EDGE, button_hover_color=ACCENT_AMBER,
             text_color=TEXT_PRIMARY, dropdown_fg_color=BG_CARD,
-            dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", FS(11)),
-            command=self._on_manual_port_select)
+            dropdown_text_color=TEXT_PRIMARY, font=("Segoe UI", FS(11)))
         self.port_combo.pack(side="right")
         self.port_menu = self.port_combo
 
-        status_row = tk.Frame(rows["Connection"], bg=BG_CARD)
-        status_row.pack(fill="x", pady=(S(6), S(0)))
-        self._conn_settings_lbl = tk.Label(
-            status_row, text="", bg=BG_CARD, fg=TEXT_DIM,
-            font=("Segoe UI", FS(10), "bold"), anchor="w")
-        self._conn_settings_lbl.pack(side="left")
-        self._color_button(
-            status_row, "Rescan", self._rescan_ports, "#1e293b",
-            width=S(86), height=S(28), font_size=FS(10), corner_radius=S(8),
-        ).pack(side="right")
-        # Paint the label with whatever state auto-connect is already in.
-        self._set_connection_state(self._conn_state, self._conn_detail)
-
         # 2) Speed — select a feed rate
         slot = _row("Speed", "Feed rate used when streaming G-code.")
+        # Speed / shape / colour option values below are left in English —
+        # they're also used as internal keys elsewhere in the code (e.g.
+        # compared against literal strings when generating G-code), so
+        # translating the stored value would silently break that logic.
         self.feed_combo = ctk.CTkComboBox(
             slot, variable=self.feed_rate,
             values=["Aqua Low", "Super Low", "Low (default)", "Medium", "High"],
@@ -1884,6 +2200,25 @@ class ShapeApp:
             command=lambda v: self._on_shape_menu_select(v))
         self.shape_menu.pack(side="right")
 
+        # 4) Kid Mode — a cartoon skin over Learn Mode only. Nothing about the
+        # machine, the canvas or any other setting changes, so the same install
+        # is a game for a child and stays exactly as it was for an elder.
+        slot = _row("Kid Mode",
+                    "Cartoon skin for Learn Mode (ages 7-12): mascot, stickers, "
+                    "confetti and simple wording. Everything else stays the same.")
+        self._color_button(
+            slot, "🎨 ON" if self.kid_mode else "OFF", self._toggle_kid_mode,
+            ACCENT_PINK if self.kid_mode else GLASS_EDGE,
+            width=S(170), height=S(32), font_size=FS(11)).pack(side="right")
+
+        slot = _row("Kid Mode sounds",
+                    "Little beeps when a part is finished. Off by default.")
+        self._color_button(
+            slot, "🔊 ON" if self.kid_sounds else "🔇 MUTED",
+            self._toggle_kid_sounds,
+            ACCENT_AMBER if self.kid_sounds else GLASS_EDGE,
+            width=S(170), height=S(32), font_size=FS(11)).pack(side="right")
+
         # Learn Mode moved out to the Features popup on the canvas toolbar.
 
         self._fade(popup, 0.0, 0.97, 0.08)
@@ -1896,7 +2231,6 @@ class ShapeApp:
         self.port_menu  = None
         self.feed_combo = None
         self.shape_menu = None
-        self._conn_settings_lbl = None   # dies with the popup
         if popup is None:
             return
         try: popup.destroy()
@@ -1910,7 +2244,7 @@ class ShapeApp:
             self._close_features_popup()
             return
         self.root.update_idletasks()
-        W, H = S(400), S(470)
+        W, H = S(400), S(360)
         sx = self.root.winfo_screenwidth()  // 2 - W // 2
         sy = self.root.winfo_screenheight() // 2 - H // 2
 
@@ -1927,9 +2261,9 @@ class ShapeApp:
         glass.place(x=0, y=0, width=W, height=H)
         self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=S(20),
                                 fill=BG_CARD, outline="#0d9488", width=2)
-        glass.create_text(24, 26, text="Features", anchor="w",
+        glass.create_text(24, 26, text=self.tr("Features"), anchor="w",
                           fill=TEXT_PRIMARY, font=("Segoe UI", FS(14), "bold"))
-        glass.create_text(24, 50, text="Extra ways to work with the robot.",
+        glass.create_text(24, 50, text=self.tr("Extra ways to work with the robot."),
                           anchor="w", fill=TEXT_DIM, font=("Segoe UI", FS(9)))
         glass.bind("<Button-1>", lambda e: "break")
 
@@ -1945,43 +2279,29 @@ class ShapeApp:
         # Learn Mode — guided, step-by-step rangoli lessons
         row = tk.Frame(body, bg=BG_CARD)
         row.pack(fill="x", pady=(S(0), S(6)))
-        tk.Label(row, text="Learn Mode", bg=BG_CARD, fg=TEXT_PRIMARY,
+        tk.Label(row, text=self.tr("Learn Mode"), bg=BG_CARD, fg=TEXT_PRIMARY,
                  font=("Segoe UI", FS(12), "bold")).pack(side="left")
         on = self.learn_mode_var.get()
         self.learn_btn = self._small_btn(
-            row, "Stop" if on else "Start", self._toggle_learn_mode,
+            row, self.tr("Stop") if on else self.tr("Start"), self._toggle_learn_mode,
             ACCENT_PINK if on else ACCENT_GREEN, "#f472b6" if on else "#4ade80")
         tk.Label(body,
-                 text="Learn to draw rangoli by hand. The robot draws one "
-                      "part, then you copy it with your powder bottle.",
+                 text=self.tr("Learn to draw rangoli by hand. The robot draws one "
+                      "part, then you copy it with your powder bottle."),
                  bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(9)),
                  wraplength=W-60, justify="left").pack(anchor="w")
 
         # Picture to Rangoli — snap a photo, AI sketches a rangoli inspired by it
         pic_row = tk.Frame(body, bg=BG_CARD)
         pic_row.pack(fill="x", pady=(S(14), S(6)))
-        tk.Label(pic_row, text="Picture to Rangoli", bg=BG_CARD, fg=TEXT_PRIMARY,
+        tk.Label(pic_row, text=self.tr("Picture to Rangoli"), bg=BG_CARD, fg=TEXT_PRIMARY,
                  font=("Segoe UI", FS(12), "bold")).pack(side="left")
         self._small_btn(
-            pic_row, "Start", self._launch_picture_to_rangoli,
+            pic_row, self.tr("Start"), self._launch_picture_to_rangoli,
             ACCENT_PINK, self._lighten(ACCENT_PINK, -30))
         tk.Label(body,
-                 text="Photograph your surroundings and the AI will sketch "
-                      "a rangoli inspired by it.",
-                 bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(9)),
-                 wraplength=W-60, justify="left").pack(anchor="w")
-
-        # Progress & Impact — the saved history of every scored Learn attempt
-        prog_row = tk.Frame(body, bg=BG_CARD)
-        prog_row.pack(fill="x", pady=(S(14), S(6)))
-        tk.Label(prog_row, text="Progress & Impact", bg=BG_CARD, fg=TEXT_PRIMARY,
-                 font=("Segoe UI", FS(12), "bold")).pack(side="left")
-        self._small_btn(
-            prog_row, "Open", self._open_progress_dashboard,
-            ACCENT_CYAN, self._lighten(ACCENT_CYAN, -30))
-        tk.Label(body,
-                 text="See how your Learn Mode scores have improved over time, "
-                      "with before and after photos.",
+                 text=self.tr("Photograph your surroundings and the AI will sketch "
+                      "a rangoli inspired by it."),
                  bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(9)),
                  wraplength=W-60, justify="left").pack(anchor="w")
 
@@ -2178,211 +2498,35 @@ class ShapeApp:
         self.context_menu.add_command(label="Move",   command=self.start_move)
         self.context_menu.add_command(label="Delete", command=self.delete_shape)
 
-    # ── USB auto-connect ──────────────────────────────────────────────────────
-    @staticmethod
-    def _port_score(p):
-        """How likely is this serial port to be the rangoli maker?
-
-        Returns a rank (higher = better) or -1 for ports that must never be
-        opened. This only decides the *order* things get tried in — the GRBL
-        handshake is what actually confirms the robot.
-        """
-        dev  = (p.device or "").lower()
-        desc = " ".join(str(getattr(p, a, "") or "")
-                        for a in ("description", "manufacturer", "product")).lower()
-        if any(bad in dev or bad in desc for bad in SERIAL_EXCLUDE_HINTS):
-            return -1
-        score = 0
-        if getattr(p, "vid", None) in CONTROLLER_VIDS:
-            score += 100
-        if any(h in dev for h in SERIAL_NAME_HINTS):
-            score += 40
-        if any(h in desc for h in SERIAL_DESC_HINTS):
-            score += 25
-        # On Windows every port is a bare "COM3" with no naming hint, so a
-        # nondescript port still deserves a try — just last.
-        return score
-
-    def _candidate_devices(self, devices):
-        """Openable ports, most robot-like first."""
-        ranked = []
-        for dev in devices:
-            info = self._port_info.get(dev)
-            score = self._port_score(info) if info is not None else 0
-            if score >= 0:
-                ranked.append((score, dev))
-        ranked.sort(key=lambda pair: (-pair[0], pair[1]))
-        return [dev for _, dev in ranked]
-
-    def _probe_grbl(self, device, timeout=GRBL_PROBE_TIMEOUT):
-        """Open a port and decide whether GRBL is on the other end.
-
-        Runs on a worker thread — opening a serial port blocks, and on an
-        Arduino it also toggles DTR, which resets the board and makes it
-        announce itself ("Grbl 1.1h ['$' for help]"). Boards that don't reset
-        get asked directly with $I. Returns (is_grbl, banner_text).
-        """
-        ser = None
-        try:
-            ser = serial.Serial(device, 115200, timeout=0.4)
-        except Exception:
-            return False, None          # busy or not openable — not our robot
-        try:
-            first = None
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-                line = ser.readline().decode(errors="ignore").strip()
-                if not line:
-                    continue
-                if "grbl" in line.lower():
-                    return True, line
-                first = first or line
-            # Silent so far: it may have been running before we opened it.
-            ser.reset_input_buffer()
-            ser.write(b"\r\n$I\r\n")
-            deadline = time.time() + 2.0
-            while time.time() < deadline:
-                line = ser.readline().decode(errors="ignore").strip()
-                if not line:
-                    continue
-                low = line.lower()
-                if "grbl" in low or line.startswith(("[VER:", "[OPT:")):
-                    return True, line
-                if low == "ok":
-                    return True, first or "GRBL (no version banner)"
-            return False, first
-        except Exception:
-            return False, None
-        finally:
-            try: ser.close()
-            except Exception: pass
-
-    _CONN_STYLES = {
-        "none":       ("○ No robot found",   TEXT_DIM),
-        "searching":  ("◌ Searching…",       ACCENT_AMBER),
-        "connected":  ("● Robot connected",  ACCENT_GREEN),
-        "unverified": ("◍ Port ready",       ACCENT_AMBER),
-    }
-
-    def _set_connection_state(self, state, detail=""):
-        self._conn_state  = state
-        self._conn_detail = detail
-        text, colour = self._CONN_STYLES.get(state, self._CONN_STYLES["none"])
-        if detail:
-            text = f"{text} · {detail}"
-        for lbl in (self._conn_lbl, self._conn_settings_lbl):
-            if lbl is None:
-                continue
-            try:
-                if lbl.winfo_exists():
-                    lbl.configure(text=text, fg=colour)
-            except tk.TclError:
-                pass
-
-    def _select_port(self, device):
-        """Point the app at ``device`` — this is what Send/Learn Mode read."""
-        self.port_var.set(device or "")
-        if self.port_combo is not None:
-            try:
-                self.port_combo.set(device or "")
-            except tk.TclError:
-                pass
-
-    def _on_manual_port_select(self, device):
-        """Operator overrode the detected port — respect it and stop hunting
-        so auto-connect doesn't yank the selection back a second later."""
-        if not device:
-            return
-        self._connected_port = device
-        self._set_connection_state("unverified", f"{device} (manual)")
-        self.log_to_console(f"Port set manually to {device}.", "info")
-
-    def _rescan_ports(self):
-        """Forget every handshake result and hunt for the robot again."""
-        if self.is_sending:
-            self.log_to_console(
-                "Auto-connect: busy printing — rescan after the job.", "err")
-            return
-        self._probe_cache.clear()
-        self._connected_port = None
-        self._set_connection_state("searching")
-        self.log_to_console("Auto-connect: rescanning USB ports…", "info")
-
+    # ── Port polling ──────────────────────────────────────────────────────────
     def poll_ports(self):
-        ports = list(serial.tools.list_ports.comports())
-        devices = [p.device for p in ports]
-
-        if devices != self.last_ports:
-            self._port_info = {p.device: p for p in ports}
-            # Forget results for anything that has been unplugged, so the same
-            # device gets a fresh handshake if it comes back.
-            for gone in set(self._probe_cache) - set(devices):
-                self._probe_cache.pop(gone, None)
+        current_ports = [p.device for p in serial.tools.list_ports.comports()]
+        if current_ports != self.last_ports:
             if self.port_combo is not None:
                 try:
-                    self.port_combo.configure(values=devices)
+                    self.port_combo.configure(values=current_ports)
                 except tk.TclError:
                     pass
-            if self._connected_port and self._connected_port not in devices:
-                self.log_to_console(
-                    f"Auto-connect: robot unplugged ({self._connected_port}).",
-                    "err")
-                self._connected_port = None
-                self._select_port("")
-            if not devices:
-                self._select_port("")
-                self._set_connection_state("none")
-            self.last_ports = devices
-
-        self._auto_connect_step(devices)
-        self.root.after(AUTO_CONNECT_POLL_MS, self.poll_ports)
-
-    def _auto_connect_step(self, devices):
-        """One tick of the hunt: handshake the next untried candidate."""
-        if self._probing or self.is_sending or not devices:
-            return
-        if self._connected_port in devices:
-            return                      # already talking to the robot
-
-        candidates = self._candidate_devices(devices)
-        untried = [d for d in candidates if d not in self._probe_cache]
-        if not untried:
-            # Everything has been tried and none of them greeted us. Still
-            # point at the most likely port so Send works for a board whose
-            # firmware just doesn't announce itself.
-            if candidates and self._conn_state != "unverified":
-                self._select_port(candidates[0])
-                self._set_connection_state("unverified", candidates[0])
-                self.log_to_console(
-                    f"Auto-connect: no GRBL greeting on any port. Using "
-                    f"{candidates[0]} — press Send to try it anyway, or click "
-                    f"the status chip to rescan.", "info")
-            return
-
-        device = untried[0]
-        self._probing = True
-        self._set_connection_state("searching", device)
-
-        def worker():
-            ok, banner = self._probe_grbl(device)
-            self.root.after(0, lambda: self._auto_connect_done(device, ok, banner))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _auto_connect_done(self, device, ok, banner):
-        self._probing = False
-        self._probe_cache[device] = bool(ok)
-        if ok:
-            self._connected_port = device
-            self._select_port(device)
-            self._set_connection_state("connected", device)
-            self.log_to_console(
-                f"Auto-connect: rangoli maker found on {device} — "
-                f"{banner or 'GRBL'}.", "recv")
-        else:
-            self.log_to_console(
-                f"Auto-connect: {device} didn't answer as a GRBL "
-                f"controller.", "info")
+            if current_ports:
+                new = list(set(current_ports) - set(self.last_ports))
+                chosen = (new[0] if new else
+                          (current_ports[0] if self.port_var.get() not in current_ports
+                           else self.port_var.get()))
+                self.port_var.set(chosen)
+                if self.port_combo is not None:
+                    try:
+                        self.port_combo.set(chosen)
+                    except tk.TclError:
+                        pass
+            else:
+                self.port_var.set("")
+                if self.port_combo is not None:
+                    try:
+                        self.port_combo.set("")
+                    except tk.TclError:
+                        pass
+            self.last_ports = current_ports
+        self.root.after(1000, self.poll_ports)
 
     # ── Coordinate helpers ────────────────────────────────────────────────────
     def to_machine(self, x, y):
@@ -3053,23 +3197,7 @@ class ShapeApp:
 
     # ── AI GENERATED DESIGN (OpenAI) ──────────────────────────────────────
     def _get_openai_api_key(self):
-        """Key used by every AI feature: design generation, Picture to Rangoli,
-        AI effects and Learn Mode photo scoring.
-
-        An openai_key.txt beside the app wins if it exists, so the key can be
-        swapped (or kept out of a shared copy of this file) without editing
-        source. The hardcoded value below is the fallback.
-        """
-        try:
-            with open(AI_KEY_FILE, "r", encoding="utf-8") as fh:
-                key = fh.read().strip()
-            if key:
-                return key
-        except OSError:
-            pass
-
-        HARDCODED_API_KEY = "sk-REPLACE_WITH_YOUR_KEY"
-        return HARDCODED_API_KEY
+        HARDCODED_API_KEY = ""
 
     def _forget_openai_api_key(self):
         try:
@@ -4538,12 +4666,23 @@ class ShapeApp:
         self._close_features_popup()
         self.log_to_console("Learn Mode ended.", "info")
 
-    def _learn_shell(self, W, H, title, subtitle=None, outline=ACCENT_GREEN):
-        """Build a standard Learn-Mode popup shell; return (popup, body frame)."""
+    def _learn_shell(self, W, H, title, subtitle=None, outline=ACCENT_GREEN,
+                     mascot=None):
+        """Build a standard Learn-Mode popup shell; return (popup, body frame).
+
+        In Kid Mode the same shell comes out as a cream cartoon card with a
+        chunky border, the playful font, a peacock mascot with a speech bubble,
+        and a skin pass scheduled over whatever the caller builds next. Every
+        Learn-Mode screen goes through here, so that is the whole hook — no
+        screen needs to know Kid Mode exists.
+        """
         self._close_learn_popup()
         self.root.update_idletasks()
+        kid = self.kid_mode
+        if kid:
+            H = min(H + S(74), self.root.winfo_screenheight() - S(40))
         sx = self.root.winfo_screenwidth()  // 2 - W // 2
-        sy = self.root.winfo_screenheight() // 2 - H // 2
+        sy = max(S(10), self.root.winfo_screenheight() // 2 - H // 2)
 
         popup = tk.Toplevel(self.root)
         popup.overrideredirect(True)
@@ -4555,25 +4694,48 @@ class ShapeApp:
         popup.transient(self.root)
         self._learn_popup = popup
 
-        glass = tk.Canvas(popup, width=W, height=H, bg=BG_DARK, highlightthickness=0)
+        card_bg = self.k_card()
+        glass = tk.Canvas(popup, width=W, height=H, bg=BG_DARK,
+                          highlightthickness=0)
         glass.pack(fill="both", expand=True)
-        self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=S(22),
-                                fill=BG_CARD, outline=outline, width=2)
-        glass.create_text(28, 30, text=title, anchor="w",
-                          fill=TEXT_PRIMARY, font=("Segoe UI", FS(16), "bold"))
+        self._kid_glass = glass if kid else None
+        self._draw_rounded_rect(
+            glass, 4, 4, W-4, H-4, radius=S(30) if kid else S(22),
+            fill=card_bg, outline=KID_THEME["outline"] if kid else outline,
+            width=S(5) if kid else 2)
+        # Only pass `width` when we want wrapping — Tk canvas items take a screen
+        # distance here and None is not one.
+        title_kw = {"width": W - 90} if kid else {}
+        glass.create_text(28, 30, text=title, anchor="w", fill=self.k_ink(),
+                          font=self.k_font(FS(17) if kid else FS(16), "bold"),
+                          **title_kw)
         top = 60
         if subtitle:
-            glass.create_text(28, 56, text=subtitle, anchor="w", fill=TEXT_DIM,
-                              font=("Segoe UI", FS(9)), width=W-90)
-            top = 84
+            glass.create_text(28, 58 if kid else 56, text=subtitle, anchor="w",
+                              fill=self.k_dim(),
+                              font=self.k_font(FS(10) if kid else FS(9)),
+                              width=W-90)
+            top = 88 if kid else 84
 
-        close_lbl = tk.Label(popup, text="✕", bg=BG_CARD, fg=TEXT_DIM,
-                             font=("Segoe UI", FS(14), "bold"), cursor="hand2")
+        close_lbl = tk.Label(popup, text="✕", bg=card_bg, fg=self.k_dim(),
+                             font=self.k_font(FS(14), "bold"), cursor="hand2")
         close_lbl.place(x=W-42, y=20)
         close_lbl.bind("<Button-1>", lambda e: self._exit_learn_mode())
 
-        body = tk.Frame(popup, bg=BG_CARD)
+        if kid:
+            # The mascot sits between the header and the screen's own content.
+            holder = self._kid_build_mascot(popup, mascot or "idle")
+            if holder is not None:
+                holder.place(x=26, y=top)
+                top += S(74)
+
+        body = tk.Frame(popup, bg=card_bg)
         body.place(x=26, y=top, width=W-52, height=H-top-22)
+
+        if kid:
+            # The caller builds its widgets after this returns, so the restyle
+            # has to wait for the event loop to come back round.
+            popup.after(0, lambda: self._kid_skin_tree(popup))
 
         self._fade(popup, 0.0, 0.97, 0.08)
         popup.lift()
@@ -4735,31 +4897,56 @@ class ShapeApp:
     def _open_learn_gallery(self):
         """Gallery of designs to learn — the robot teaches one part at a time."""
         W, H = S(720), S(560)
-        popup, body = self._learn_shell(
-            W, H, "Choose a design to learn",
-            "Pick a rangoli. The robot will draw it one part at a time so you "
-            "can copy each part by hand.", outline=ACCENT_BLUE)
+        meta = self._learn_level_meta()
+        scored = len(self._learn_scored_attempts())
+        sym = self._learn_symmetry_mode()
+        blurb = (meta['blurb'] if self._learn_lesson == "full" else
+                 "Watch the design traced as the fewest unbroken lines the "
+                 "maths allows, and see where the line has to stop."
+                 if self._learn_lesson == "oneline" else
+                 f"The robot draws one half, you draw the reflection across "
+                 f"{LEARN_SYMMETRY_LABELS[sym]} ({sym}).")
+        if self.kid_mode:
+            popup, body = self._learn_shell(
+                W, H, "Pick a rangoli to make!",
+                f"{self._kid_progress_line()}      {blurb}",
+                outline=KID_THEME["outline"], mascot="idle")
+        else:
+            popup, body = self._learn_shell(
+                W, H, f"Choose a design to learn  ·  {self._learn_level_label()}",
+                f"{blurb}  "
+                f"({scored} scored rangoli so far — your level is saved between "
+                f"sessions and moves with your AI scores.)", outline=ACCENT_BLUE)
 
-        # Who the attempt gets filed under. Shown here rather than as a blocking
-        # prompt so the lesson flow is unchanged for anyone who ignores it.
-        who = tk.Frame(body, bg=BG_CARD)
-        who.pack(fill="x", pady=(0, S(8)))
-        tk.Label(who, text="Practising as:", bg=BG_CARD, fg=TEXT_DIM,
-                 font=("Segoe UI", FS(10))).pack(side="left")
-        tk.Label(who, text=self._learn_learner or "Guest", bg=BG_CARD,
-                 fg=ACCENT_CYAN, font=("Segoe UI", FS(10), "bold")).pack(
-                     side="left", padx=(S(6), S(10)))
-        self._color_button(
-            who, "Change", lambda: self._prompt_learner_name(
-                self._open_learn_gallery),
-            BG_INPUT, width=S(88), height=S(28), font_size=FS(10),
-            text_color=TEXT_PRIMARY, corner_radius=S(14)).pack(side="left")
+        # Lesson type. Drawing a whole rangoli never isolates symmetry, so it
+        # gets its own lesson rather than being folded into the normal walk.
+        picker = tk.Frame(body, bg=BG_CARD)
+        picker.pack(fill="x", pady=(S(0), S(8)))
+        labels = ((("full", "🎨 Make the whole thing"),
+                   ("symmetry", "🦋 Mirror game"),
+                   ("oneline", "🪄 Magic one-line trick"))
+                  if self.kid_mode else
+                  (("full", "Whole design"),
+                   ("symmetry", "⇄ Symmetry challenge"),
+                   ("oneline", "◉ One continuous line")))
+        for key, label in labels:
+            on = (self._learn_lesson == key)
+            b = tk.Label(picker, text=label,
+                         bg=ACCENT_CYAN if on else BG_INPUT,
+                         fg="#06281c" if on else TEXT_DIM,
+                         font=("Segoe UI", FS(10), "bold"),
+                         padx=S(14), pady=S(6), cursor="hand2")
+            b.pack(side="left", padx=(S(0), S(8)))
+            b.bind("<Button-1>", lambda e, k=key: self._set_learn_lesson(k))
+        if self.kid_mode:
+            sb = tk.Label(picker, text="🏅 My stickers", bg=ACCENT_PINK,
+                          fg="#4a1d2f", font=("Segoe UI", FS(10), "bold"),
+                          padx=S(14), pady=S(6), cursor="hand2")
+            sb.pack(side="right")
+            sb.bind("<Button-1>", lambda e: self._open_kid_stickers())
 
-        scroll_host = tk.Frame(body, bg=BG_CARD)
-        scroll_host.pack(fill="both", expand=True)
-        scroll_cv = tk.Canvas(scroll_host, bg=BG_CARD, highlightthickness=0)
-        scroll_sb = tk.Scrollbar(scroll_host, orient="vertical",
-                                 command=scroll_cv.yview)
+        scroll_cv = tk.Canvas(body, bg=BG_CARD, highlightthickness=0)
+        scroll_sb = tk.Scrollbar(body, orient="vertical", command=scroll_cv.yview)
         inner = tk.Frame(scroll_cv, bg=BG_CARD)
         scroll_cv.configure(yscrollcommand=scroll_sb.set)
         scroll_sb.pack(side="right", fill="y")
@@ -4789,6 +4976,13 @@ class ShapeApp:
             for w in [card, thumb] + list(card.winfo_children()):
                 w.bind("<Button-1>", lambda e, nm=name: self._choose_learn_design(nm))
 
+    def _set_learn_lesson(self, kind):
+        """Switch between the whole-design walk and the symmetry drill."""
+        if kind == self._learn_lesson:
+            return
+        self._learn_lesson = kind
+        self._open_learn_gallery()
+
     def _choose_learn_design(self, name):
         """Split the design between student and robot, then start the lesson."""
         cx = MARGIN_L + GRAPH_W // 2
@@ -4797,6 +4991,7 @@ class ShapeApp:
         paths = PRESET_DESIGNS[name]['generator'](cx, cy, size)
         self._learn_design = name
         self._learn_parts = [p for p in paths if len(p) >= 2]
+        self._learn_center = (cx, cy)
         if not self._learn_parts:
             self.show_hint_popup("That design has no parts to teach")
             return
@@ -4804,19 +4999,916 @@ class ShapeApp:
         self._learn_robot_idx = None
         self._learn_streaming = False
         self._learn_next_free = 0
-        self._learn_student_idx = self._learn_take_next()
+        self._learn_student_idx = None
+        self._learn_level_note = None
+        self._learn_sym_pairs = []
+        self._learn_sym_idx = 0
+        # Cleared before the branch so a previous Pulli Mode run can't leave
+        # its scaffold behind in a symmetry lesson.
+        self._learn_dots = []
+        self._learn_dots_laid = False
+
+        if self._learn_lesson == "symmetry":
+            self._learn_start_symmetry(name)
+            return
+        if self._learn_lesson == "oneline":
+            # A visualisation, not a lesson — no camera step, nothing scored.
+            self._open_learn_oneline()
+            return
+
+        robot_parts = self._learn_build_plan()
+        self._learn_dots = (self._learn_pulli_dots()
+                            if self._learn_is_pulli() else [])
         self.log_to_console(
-            f"Learn Mode: '{name}' has {len(self._learn_parts)} parts. You and "
-            f"the robot fill them in together.", "info")
-        self._open_learn_step()
+            f"Learn Mode: '{name}' has {len(self._learn_parts)} parts at "
+            f"{self._learn_level_label()} — robot draws "
+            f"{len(robot_parts)}, you draw "
+            f"{len(self._learn_parts) - len(robot_parts)}.", "info")
+
+        if self._learn_dots:
+            # Pulli Mode: the dots go down first, as one whole scaffold, then
+            # every line is the child's.
+            self._open_learn_pulli_step()
+            return
+        self._learn_advance()
+
+    # ── Kid Mode: config, theme, skin ────────────────────────────────────────
+    # Same read/write pattern as the camera and language configs: a small JSON
+    # file next to the app, loaded in __init__, never allowed to break anything
+    # if it is missing or corrupt.
+
+    def _load_kid_mode_config(self):
+        try:
+            with open(KID_MODE_CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.kid_mode   = bool(data.get("kid_mode", False))
+            # Sounds stay off unless the file explicitly says otherwise —
+            # a classroom of 30 tablets chirping is nobody's idea of a feature.
+            self.kid_sounds = bool(data.get("sounds", False))
+        except Exception:
+            self.kid_mode   = False
+            self.kid_sounds = False
+
+    def _save_kid_mode_config(self):
+        try:
+            with open(KID_MODE_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump({"kid_mode": self.kid_mode,
+                           "sounds":   self.kid_sounds}, f, indent=2)
+        except OSError as e:
+            self.log_to_console(f"Kid Mode: couldn't save the setting — {e}", "err")
+
+    def _toggle_kid_mode(self):
+        self.kid_mode = not self.kid_mode
+        self._save_kid_mode_config()
+        self.log_to_console(
+            f"Kid Mode {'ON — Learn Mode is now a game' if self.kid_mode else 'OFF'}.",
+            "info")
+        # Repaint the Settings popup so the button label follows the state, and
+        # restart any open Learn screen under the new skin.
+        if self._settings_popup is not None:
+            self._open_settings_popup()
+        if self._learn_popup is not None:
+            self._open_learn_gallery()
+
+    def _toggle_kid_sounds(self):
+        self.kid_sounds = not self.kid_sounds
+        self._save_kid_mode_config()
+        if self.kid_sounds:
+            self._kid_sound("cheer")
+        if self._settings_popup is not None:
+            self._open_settings_popup()
+
+    # ── theme accessors: normal value, or the kid one ─────────────────────────
+    def k_card(self):   return KID_THEME["card"]   if self.kid_mode else BG_CARD
+    def k_input(self):  return KID_THEME["input"]  if self.kid_mode else BG_INPUT
+    def k_ink(self):    return KID_THEME["ink"]    if self.kid_mode else TEXT_PRIMARY
+    def k_dim(self):    return KID_THEME["dim"]    if self.kid_mode else TEXT_DIM
+    def k_canvas(self): return KID_THEME["canvas"] if self.kid_mode else CANVAS_BG
+
+    def k_family(self):
+        """The playful font family, or Segoe UI when Kid Mode is off.
+
+        Resolved against the families Tk actually reports, because naming a font
+        that isn't installed doesn't fail — it silently substitutes something
+        else, which is how a cartoon screen ends up in Times New Roman.
+        """
+        if not self.kid_mode:
+            return "Segoe UI"
+        if self._kid_font is None:
+            try:
+                import tkinter.font as _tkf
+                have = {f.lower() for f in _tkf.families(self.root)}
+            except Exception:
+                have = set()
+            self._kid_font = next(
+                (f for f in KID_FONT_CANDIDATES if f.lower() in have), "Segoe UI")
+            self.log_to_console(f"Kid Mode: using the '{self._kid_font}' font.",
+                                "info")
+        return self._kid_font
+
+    def k_font(self, size, weight="normal"):
+        return (self.k_family(), size, weight)
+
+    def kid_pick(self, kid_text, adult_text):
+        """Choose between child wording and the normal wording."""
+        return kid_text if self.kid_mode else adult_text
+
+    def _kid_skin_tree(self, widget, depth=0):
+        """Recolour a finished Learn-Mode widget tree for Kid Mode.
+
+        Applied as one pass over the built tree rather than threading a theme
+        argument through every screen: the Learn Mode screens are ordinary
+        tk widgets using the module colour constants, so remapping those
+        constants after the fact restyles all of them — including the ones added
+        later — without touching a single call site.
+        """
+        if not self.kid_mode or depth > 12:
+            return
+        try:
+            kids = widget.winfo_children()
+        except tk.TclError:
+            return
+        for w in kids:
+            # CTk widgets are composites (an internal canvas plus a label), so
+            # restyle them through their own API and never walk inside — poking
+            # at their internals with raw bg/fg breaks how they draw themselves.
+            if isinstance(w, ctk.CTkBaseClass):
+                if isinstance(w, ctk.CTkButton):
+                    try:
+                        w.configure(corner_radius=S(18),
+                                    font=(self.k_family(), FS(13), "bold"))
+                    except Exception:
+                        pass
+                continue
+            try:
+                cls = w.winfo_class()
+                if cls == "Label" or cls == "Frame" or cls == "Canvas":
+                    cur_bg = str(w.cget("bg"))
+                    if cur_bg == BG_CARD:
+                        w.configure(bg=KID_THEME["card"])
+                    elif cur_bg == BG_INPUT:
+                        w.configure(bg=KID_THEME["input"])
+                    elif cur_bg == CANVAS_BG:
+                        w.configure(bg=KID_THEME["canvas"])
+                if cls == "Label":
+                    cur_fg = str(w.cget("fg"))
+                    if cur_fg == TEXT_PRIMARY:
+                        w.configure(fg=KID_THEME["ink"])
+                    elif cur_fg == TEXT_DIM:
+                        w.configure(fg=KID_THEME["dim"])
+                    f = w.cget("font")
+                    fam, size, weight = self._kid_parse_font(f)
+                    if fam:
+                        w.configure(font=(self.k_family(), size, weight))
+            except (tk.TclError, ValueError):
+                pass
+            self._kid_skin_tree(w, depth + 1)
+
+    @staticmethod
+    def _kid_parse_font(spec):
+        """Pull (family, size, weight) out of whatever Tk hands back for a font.
+
+        Tk returns a tuple sometimes and a flat string like
+        '{Segoe UI} 11 bold' others, so both shapes have to be handled or the
+        skin pass throws on the first Label it meets.
+        """
+        try:
+            if isinstance(spec, (tuple, list)) and spec:
+                fam = str(spec[0])
+                size = int(spec[1]) if len(spec) > 1 else 10
+                weight = str(spec[2]) if len(spec) > 2 else "normal"
+                return fam, size, weight
+            text = str(spec)
+            if not text:
+                return None, 10, "normal"
+            weight = "bold" if "bold" in text.lower() else "normal"
+            nums = [int(t) for t in text.replace("{", " ").replace("}", " ").split()
+                    if t.lstrip("-").isdigit()]
+            size = abs(nums[0]) if nums else 10
+            fam = text.split("}")[0].lstrip("{") if "{" in text else text.split()[0]
+            return fam, size, weight
+        except Exception:
+            return None, 10, "normal"
+
+    # ── Kid Mode: sounds (muted unless switched on) ───────────────────────────
+    def _kid_sound(self, kind):
+        """Tiny beep cue. No-op unless Kid Mode AND sounds are both on.
+
+        winsound is stdlib but Windows-only and blocks for the duration of the
+        beep, so it runs on a daemon thread and every failure is swallowed —
+        a missing sound device must never interrupt a lesson.
+        """
+        if not (self.kid_mode and self.kid_sounds):
+            return
+        tunes = {"cheer": [(880, 90), (1175, 90), (1568, 130)],
+                 "oops":  [(440, 130), (349, 160)],
+                 "step":  [(1047, 60)],
+                 "badge": [(784, 80), (988, 80), (1319, 80), (1568, 160)]}
+        notes = tunes.get(kind)
+        if not notes:
+            return
+
+        def _play():
+            try:
+                import winsound
+                for freq, ms in notes:
+                    winsound.Beep(freq, ms)
+            except Exception:
+                pass
+        threading.Thread(target=_play, daemon=True).start()
+
+    # ── Kid Mode: the mascot ──────────────────────────────────────────────────
+    # A peacock drawn from canvas primitives rather than an image file, so it
+    # ships with the source and can't go missing. It has four moods and reacts
+    # to what the child just did.
+
+    KID_MASCOT_LINES = {
+        "idle":   ["Let's make a rangoli!", "Ready when you are!",
+                   "Pick a pretty one!"],
+        "watch":  ["Watch closely…", "Ooh, look at that line!",
+                   "My turn — then yours!"],
+        "cheer":  ["Wow! Nice one!", "You did it!", "Beautiful!",
+                   "High five!", "You're getting good at this!"],
+        "oops":   ["Nearly! Try that bit again.", "Wobbly lines are fine —"
+                   " keep going!", "Every rangoli takes practice!",
+                   "Go slow, you've got this."],
+    }
+
+    def _kid_set_mood(self, mood, line=None):
+        """Point the mascot at a mood and say something."""
+        if not self.kid_mode:
+            return
+        self._kid_mascot_mood = mood
+        if line is None:
+            opts = self.KID_MASCOT_LINES.get(mood) or [""]
+            line = opts[random.randrange(len(opts))]
+        lbl = self._kid_bubble
+        if lbl is not None:
+            try:
+                if lbl.winfo_exists():
+                    lbl.configure(text=line)
+            except tk.TclError:
+                self._kid_bubble = None
+        if mood == "cheer":
+            self._kid_sound("cheer")
+        elif mood == "oops":
+            self._kid_sound("oops")
+
+    def _kid_build_mascot(self, parent, mood="idle"):
+        """Place the mascot plus its speech bubble into a Learn-Mode popup."""
+        if not self.kid_mode:
+            return None
+        holder = tk.Frame(parent, bg=KID_THEME["card"])
+        cv = tk.Canvas(holder, width=S(74), height=S(74),
+                       bg=KID_THEME["card"], highlightthickness=0)
+        cv.pack(side="left")
+        self._kid_mascot = cv
+        self._kid_mascot_mood = mood
+        self._kid_mascot_phase = 0
+        self._kid_bubble = tk.Label(
+            holder, text="", bg=KID_THEME["input"], fg=KID_THEME["ink"],
+            font=self.k_font(FS(10), "bold"), padx=S(10), pady=S(6),
+            justify="left", wraplength=S(230))
+        self._kid_bubble.pack(side="left", padx=(S(8), 0))
+        self._kid_set_mood(mood)
+        self._kid_mascot_tick()
+        return holder
+
+    def _kid_mascot_tick(self):
+        """Animate the peacock: a gentle bob, a shimmering tail, a blink."""
+        cv = self._kid_mascot
+        try:
+            alive = cv is not None and cv.winfo_exists()
+        except tk.TclError:
+            alive = False
+        if not alive:
+            self._kid_mascot = None
+            self._kid_mascot_after = None
+            return
+
+        p = self._kid_mascot_phase
+        self._kid_mascot_phase = p + 1
+        mood = self._kid_mascot_mood
+        cv.delete("all")
+
+        cx, cy = S(37), S(46)
+        bob = math.sin(p * 0.25) * (S(3) if mood == "cheer" else S(1.4))
+        # tail fan behind the body
+        n = 7
+        for i in range(n):
+            ang = math.radians(-160 + i * (120 / (n - 1)))
+            spread = S(26) + (S(4) * math.sin(p * 0.2 + i) if mood == "cheer"
+                              else S(1) * math.sin(p * 0.1 + i))
+            tx = cx + spread * math.cos(ang)
+            ty = cy + spread * math.sin(ang) - S(6) + bob
+            shade = ["#0ea5e9", "#06b6d4", "#14b8a6", "#22c55e",
+                     "#14b8a6", "#06b6d4", "#0ea5e9"][i]
+            cv.create_line(cx, cy + bob, tx, ty, fill=shade, width=S(3),
+                           capstyle="round")
+            cv.create_oval(tx - S(4), ty - S(4), tx + S(4), ty + S(4),
+                           fill=shade, outline="#134e4a", width=1)
+            cv.create_oval(tx - S(1.6), ty - S(1.6), tx + S(1.6), ty + S(1.6),
+                           fill="#fde047", outline="")
+        # body
+        cv.create_oval(cx - S(11), cy - S(6) + bob, cx + S(11), cy + S(15) + bob,
+                       fill="#1d4ed8", outline="#1e3a8a", width=2)
+        # head + neck
+        hy = cy - S(17) + bob
+        cv.create_line(cx, cy + bob, cx, hy, fill="#1d4ed8", width=S(6),
+                       capstyle="round")
+        cv.create_oval(cx - S(7), hy - S(7), cx + S(7), hy + S(7),
+                       fill="#2563eb", outline="#1e3a8a", width=2)
+        # crest
+        for k in (-1, 0, 1):
+            cv.create_line(cx + k * S(3), hy - S(6),
+                           cx + k * S(5), hy - S(12), fill="#facc15", width=2)
+            cv.create_oval(cx + k * S(5) - 2, hy - S(12) - 2,
+                           cx + k * S(5) + 2, hy - S(12) + 2,
+                           fill="#facc15", outline="")
+        # eye — blinks every so often, squeezes shut when cheering
+        blink = (p % 46) in (0, 1, 2)
+        if blink or mood == "cheer":
+            cv.create_line(cx + S(1), hy - S(1), cx + S(6), hy - S(1),
+                           fill="#0f172a", width=2)
+        else:
+            cv.create_oval(cx + S(1), hy - S(3), cx + S(5), hy + S(1),
+                           fill="#0f172a", outline="")
+        # beak, tilted down a little when encouraging
+        droop = S(2) if mood == "oops" else 0
+        cv.create_polygon(cx + S(6), hy - S(1) + droop,
+                          cx + S(13), hy + S(1) + droop,
+                          cx + S(6), hy + S(3) + droop,
+                          fill="#f59e0b", outline="#b45309")
+        # feet
+        cv.create_line(cx - S(4), cy + S(15) + bob, cx - S(4), cy + S(19) + bob,
+                       fill="#f59e0b", width=2)
+        cv.create_line(cx + S(4), cy + S(15) + bob, cx + S(4), cy + S(19) + bob,
+                       fill="#f59e0b", width=2)
+
+        delay = 70 if mood == "cheer" else 130
+        self._kid_mascot_after = self.root.after(delay, self._kid_mascot_tick)
+
+    def _kid_stop_mascot(self):
+        if self._kid_mascot_after is not None:
+            try: self.root.after_cancel(self._kid_mascot_after)
+            except Exception: pass
+            self._kid_mascot_after = None
+        self._kid_mascot = None
+        self._kid_bubble = None
+
+    # ── Kid Mode: confetti ────────────────────────────────────────────────────
+    def _kid_confetti_burst(self, n=34):
+        """Throw confetti across the open Learn popup's backdrop canvas."""
+        if not self.kid_mode:
+            return
+        cv = self._kid_glass
+        try:
+            if cv is None or not cv.winfo_exists():
+                return
+            W = int(cv.cget("width"))
+        except (tk.TclError, ValueError):
+            return
+        self._kid_stop_confetti()
+        self._kid_confetti = []
+        for _ in range(n):
+            x = random.uniform(W * 0.1, W * 0.9)
+            y = random.uniform(-S(40), S(40))
+            col = KID_CONFETTI_COLORS[random.randrange(len(KID_CONFETTI_COLORS))]
+            size = random.uniform(S(4), S(9))
+            try:
+                item = cv.create_rectangle(x, y, x + size, y + size * 0.6,
+                                           fill=col, outline="",
+                                           tags="kid_confetti")
+            except tk.TclError:
+                return
+            self._kid_confetti.append({
+                "id": item, "x": x, "y": y,
+                "vx": random.uniform(-S(1.2), S(1.2)),
+                "vy": random.uniform(S(2.4), S(5.2)),
+                "w": size, "h": size * 0.6})
+        self._kid_confetti_step(0)
+
+    def _kid_confetti_step(self, frame):
+        cv = self._kid_glass
+        try:
+            alive = cv is not None and cv.winfo_exists()
+            H = int(cv.cget("height")) if alive else 0
+        except (tk.TclError, ValueError):
+            alive, H = False, 0
+        if not alive or frame > 90:
+            self._kid_stop_confetti()
+            return
+        for c in self._kid_confetti:
+            c["x"] += c["vx"]
+            c["y"] += c["vy"]
+            c["vy"] += S(0.12)              # a little gravity
+            try:
+                cv.coords(c["id"], c["x"], c["y"],
+                          c["x"] + c["w"], c["y"] + c["h"])
+            except tk.TclError:
+                pass
+        self._kid_confetti = [c for c in self._kid_confetti if c["y"] < H + S(20)]
+        if not self._kid_confetti:
+            self._kid_stop_confetti()
+            return
+        self._kid_confetti_after = self.root.after(
+            24, lambda: self._kid_confetti_step(frame + 1))
+
+    def _kid_stop_confetti(self):
+        if self._kid_confetti_after is not None:
+            try: self.root.after_cancel(self._kid_confetti_after)
+            except Exception: pass
+            self._kid_confetti_after = None
+        cv = self._kid_glass
+        if cv is not None:
+            try:
+                if cv.winfo_exists():
+                    cv.delete("kid_confetti")
+            except tk.TclError:
+                pass
+        self._kid_confetti = []
+
+    def _kid_celebrate(self, line=None):
+        """The full "you finished a bit" reaction: confetti, cheer, mascot."""
+        if not self.kid_mode:
+            return
+        self._kid_confetti_burst()
+        self._kid_set_mood("cheer", line)
+
+    # ── Kid Mode: the powder-bottle buddy that walks the simulated line ──────
+    def _kid_draw_buddy(self, canvas, x, y, phase, tag="kid_buddy", scale=1.0):
+        """Draw the little squeeze-bottle character at the pen tip.
+
+        Replaces the plain green dot in the simulators: same position, same
+        meaning, but it leans into the direction of travel and its body
+        squashes as it "walks", so a child reads it as somebody drawing rather
+        than a cursor moving.
+        """
+        try:
+            canvas.delete(tag)
+        except tk.TclError:
+            return
+        u = lambda v: v * scale
+        squash = math.sin(phase * 0.4) * u(1.6)
+        lean = math.sin(phase * 0.2) * u(1.2)
+        try:
+            # bottle body
+            canvas.create_oval(x - u(7) + lean, y - u(15) - squash,
+                               x + u(7) + lean, y + u(3),
+                               fill="#fb7185", outline="#9f1239", width=2,
+                               tags=tag)
+            # cap / nozzle pointing at the line
+            canvas.create_polygon(x - u(3) + lean, y - u(15) - squash,
+                                  x + u(3) + lean, y - u(15) - squash,
+                                  x + u(1.5), y - u(21) - squash,
+                                  x - u(1.5), y - u(21) - squash,
+                                  fill="#f59e0b", outline="#b45309", tags=tag)
+            # eyes + smile
+            for ex in (-u(3), u(2.4)):
+                canvas.create_oval(x + ex + lean, y - u(10) - squash,
+                                   x + ex + u(2.4) + lean, y - u(7) - squash,
+                                   fill="#ffffff", outline="", tags=tag)
+                canvas.create_oval(x + ex + u(0.7) + lean, y - u(9.4) - squash,
+                                   x + ex + u(1.9) + lean, y - u(8) - squash,
+                                   fill="#0f172a", outline="", tags=tag)
+            canvas.create_arc(x - u(3.4) + lean, y - u(8) - squash,
+                              x + u(3.4) + lean, y - u(3) - squash,
+                              start=200, extent=140, style="arc",
+                              outline="#7f1d1d", width=2, tags=tag)
+            # the drop leaving the nozzle
+            canvas.create_oval(x - u(1.4), y + u(1), x + u(1.4), y + u(4),
+                               fill="#fda4af", outline="", tags=tag)
+        except tk.TclError:
+            pass
+
+    def _kid_sparkle(self, canvas, x, y, tag="kid_spark"):
+        """Drop a sparkle behind the buddy, culling the oldest so the trail
+        stays a trail rather than slowly filling the canvas."""
+        if not self.kid_mode:
+            return
+        col = KID_SPARKLE_COLORS[random.randrange(len(KID_SPARKLE_COLORS))]
+        r = random.uniform(1.6, 3.4)
+        ox = x + random.uniform(-5.0, 5.0)
+        oy = y + random.uniform(-5.0, 5.0)
+        try:
+            item = canvas.create_text(ox, oy, text="✦", fill=col,
+                                      font=("Segoe UI", int(6 + r)), tags=tag)
+        except tk.TclError:
+            return
+        self._kid_sparkles.append((canvas, item))
+        while len(self._kid_sparkles) > KID_MAX_SPARKLES:
+            old_cv, old_item = self._kid_sparkles.pop(0)
+            try:
+                old_cv.delete(old_item)
+            except tk.TclError:
+                pass
+
+    def _kid_clear_sparkles(self):
+        for cv, item in self._kid_sparkles:
+            try:
+                cv.delete(item)
+            except tk.TclError:
+                pass
+        self._kid_sparkles = []
+
+    # ── Kid Mode: stars, stickers, streaks ────────────────────────────────────
+    @staticmethod
+    def _kid_stars_for(score, out_of=10):
+        """Score → 1-5 stars. The number itself is still shown alongside; this
+        is a friendlier reading of it, not a replacement for the data."""
+        try:
+            norm = float(score) * 10.0 / (float(out_of) or 10.0)
+        except (TypeError, ValueError):
+            return 0
+        return sum(1 for t in KID_STAR_THRESHOLDS if norm >= t)
+
+    def _kid_star_text(self, score, out_of=10):
+        n = self._kid_stars_for(score, out_of)
+        return "★" * n + "☆" * (5 - n)
+
+    def _kid_practice_days(self):
+        """Distinct calendar days that have a recorded session, newest first."""
+        days = set()
+        for s in self._learn_sessions:
+            ts = str(s.get("timestamp") or "")
+            if len(ts) >= 10:
+                days.add(ts[:10])
+        return sorted(days, reverse=True)
+
+    def _kid_streak(self):
+        """Consecutive days up to today with at least one session.
+
+        Counts practice, not scores, so a child who drew today gets credit even
+        if there was no camera or no API key. A gap of one day ends it.
+        """
+        days = self._kid_practice_days()
+        if not days:
+            return 0
+        import datetime
+        try:
+            today = datetime.date.fromisoformat(time.strftime("%Y-%m-%d"))
+            latest = datetime.date.fromisoformat(days[0])
+        except ValueError:
+            return 0
+        if (today - latest).days > 1:
+            return 0                      # streak already broken
+        streak, cursor = 1, latest
+        for d in days[1:]:
+            try:
+                dd = datetime.date.fromisoformat(d)
+            except ValueError:
+                continue
+            if (cursor - dd).days == 1:
+                streak += 1
+                cursor = dd
+            elif (cursor - dd).days == 0:
+                continue                  # same day, already counted
+            else:
+                break
+        return streak
+
+    def _kid_earned_badges(self):
+        """Which stickers are genuinely earned, by key.
+
+        Every rule reads the profile. Score-based rules use AI-scored rows only,
+        for the same reason the level does: the fallback verdict is a hardcoded
+        9/10 and would hand out a sticker nobody earned.
+        """
+        ai = [s for s in self._learn_sessions if s.get("scored_by") == "ai"]
+        def norm(s):
+            try:
+                return float(s.get("score", 0)) * 10.0 / (float(s.get("out_of") or 10))
+            except (TypeError, ValueError):
+                return 0.0
+        sym_good = sum(1 for s in ai
+                       if s.get("lesson") == "symmetry" and norm(s) >= 8)
+        earned = set()
+        if ai:
+            earned.add("first")
+        if any(norm(s) >= 9 for s in ai):
+            earned.add("steady")
+        if sym_good >= 3:
+            earned.add("symmetry")
+        if self._kid_oneline_solved:
+            earned.add("oneline")
+        if self._learn_level >= LEARN_MAX_LEVEL:
+            earned.add("pulli")
+        if self._kid_streak() >= 7:
+            earned.add("streak")
+        return earned
+
+    def _kid_progress_line(self):
+        """One-line summary for the top of the kid gallery."""
+        streak = self._kid_streak()
+        earned = len(self._kid_earned_badges())
+        bits = []
+        if streak >= 2:
+            bits.append(f"🔥 {streak}-day streak!")
+        elif streak == 1:
+            bits.append("🔥 Practising today!")
+        bits.append(f"🏅 {earned} of {len(KID_BADGES)} stickers")
+        bits.append(f"⭐ Level {self._learn_level}")
+        return "   ".join(bits)
+
+    def _open_kid_stickers(self):
+        """The sticker book — every badge, earned or still to go."""
+        earned = self._kid_earned_badges()
+        streak = self._kid_streak()
+        W, H = S(600), S(560)
+        _, body = self._learn_shell(
+            W, H, "My stickers",
+            f"You've earned {len(earned)} of {len(KID_BADGES)}. "
+            f"{'Keep the streak going!' if streak else 'Draw today to start a streak!'}",
+            outline=KID_THEME["outline"], mascot="cheer" if earned else "idle")
+
+        days = len(self._kid_practice_days())
+        top = tk.Label(
+            body,
+            text=(f"🔥 {streak}-day streak" if streak else "No streak yet") +
+                 f"   ·   {days} day{'' if days == 1 else 's'} of practice"
+                 f"   ·   {len(self._learn_sessions)} rangoli drawn",
+            bg=self.k_card(), fg=self.k_ink(), font=self.k_font(FS(11), "bold"))
+        top.pack(anchor="w", pady=(0, S(10)))
+
+        grid = tk.Frame(body, bg=self.k_card())
+        grid.pack(fill="both", expand=True)
+        for i, b in enumerate(KID_BADGES):
+            got = b["key"] in earned
+            r, c = divmod(i, 2)
+            card = tk.Frame(grid, bg=KID_THEME["input"] if got else "#eeeae4")
+            card.grid(row=r, column=c, padx=S(6), pady=S(6), sticky="nsew")
+            grid.grid_columnconfigure(c, weight=1)
+            tk.Label(card, text=b["icon"] if got else "🔒",
+                     bg=card.cget("bg"), font=("Segoe UI Emoji", FS(22))).pack(
+                         pady=(S(8), 0))
+            tk.Label(card, text=b["name"], bg=card.cget("bg"),
+                     fg=self.k_ink() if got else "#a49a90",
+                     font=self.k_font(FS(11), "bold")).pack()
+            tk.Label(card, text="Earned!" if got else b["how"],
+                     bg=card.cget("bg"),
+                     fg=KID_THEME["cheer"] if got else "#a49a90",
+                     font=self.k_font(FS(9)), wraplength=S(230),
+                     justify="center").pack(pady=(S(2), S(8)))
+
+        self._color_button(
+            body, "← Back to designs", self._open_learn_gallery,
+            ACCENT_GREEN, width=W-52, height=S(44),
+            font_size=FS(12)).pack(side="bottom", pady=(S(10), 0))
+
+    # ── Learn Mode: the persisted learner profile ────────────────────────────
+    # Difficulty used to be a fixed student/robot alternation, identical on the
+    # child's first session and their fiftieth. It is now driven by this file:
+    # the attempts the vision model actually scored, and the level derived from
+    # them. Same read/write pattern as the camera config — a small JSON file
+    # next to the app, loaded in __init__, never allowed to break Learn Mode.
+
+    def _load_learner_profile(self):
+        """Restore the learner's level and scored history from disk.
+
+        Runs from __init__, before the console exists, so problems stay silent
+        — a missing or corrupt profile just means "a brand new learner", which
+        must never stop Learn Mode from opening.
+        """
+        try:
+            with open(LEARNER_PROFILE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            lvl = data.get("level")
+            if isinstance(lvl, int) and 1 <= lvl <= LEARN_MAX_LEVEL:
+                self._learn_level = lvl
+            sessions = data.get("sessions")
+            if isinstance(sessions, list):
+                self._learn_sessions = [s for s in sessions
+                                        if isinstance(s, dict)]
+            solved = data.get("oneline_solved")
+            if isinstance(solved, list):
+                self._kid_oneline_solved = [str(d) for d in solved if d]
+        except Exception:
+            self._learn_level    = 1
+            self._learn_sessions = []
+            self._kid_oneline_solved = []
+
+    def _save_learner_profile(self):
+        try:
+            with open(LEARNER_PROFILE_FILE, "w", encoding="utf-8") as f:
+                json.dump({"version":  1,
+                           "level":    self._learn_level,
+                           "sessions": self._learn_sessions,
+                           # evidence for the "One-Line Wizard" sticker
+                           "oneline_solved": self._kid_oneline_solved},
+                          f, indent=2)
+            return True
+        except OSError as e:
+            self.log_to_console(
+                f"Learn Mode: couldn't save the learner profile — {e}", "err")
+            return False
+
+    def _learn_level_meta(self, level=None):
+        lvl = self._learn_level if level is None else level
+        return LEARN_LEVELS.get(max(1, min(LEARN_MAX_LEVEL, lvl)),
+                                LEARN_LEVELS[1])
+
+    def _learn_is_pulli(self, level=None):
+        """True at the graduation level, where the robot only lays dots."""
+        return bool(self._learn_level_meta(level).get("pulli"))
+
+    def _learn_level_label(self, level=None):
+        lvl = self._learn_level if level is None else level
+        return f"Level {lvl} · {self._learn_level_meta(lvl)['title']}"
+
+    def _learn_scored_attempts(self, level=None):
+        """AI-scored attempts, oldest first, normalised to a 0-10 score.
+
+        Fallback verdicts are excluded on purpose. ``_learn_fallback_verdict``
+        is a hardcoded 9/10 shown when there is no photo or no API key, and
+        counting it would promote a child straight to Pulli Mode without them
+        ever having drawn anything the model looked at.
+        """
+        out = []
+        for s in self._learn_sessions:
+            if s.get("scored_by") != "ai":
+                continue
+            if level is not None and s.get("level") != level:
+                continue
+            try:
+                out_of = float(s.get("out_of") or 10) or 10.0
+                out.append(float(s.get("score", 0)) * 10.0 / out_of)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def _learn_recompute_level(self):
+        """Move the learner up or down on the strength of their real scores.
+
+        Promotion needs LEARN_LEVEL_WINDOW consecutive AI-scored attempts at
+        the current level, all at or above LEARN_PROMOTE_SCORE; a demotion
+        needs the same window all below LEARN_DEMOTE_SCORE. Anything in
+        between holds the level, so one shaky rangoli never costs a child the
+        progress they earned. Returns the new level.
+        """
+        old = self._learn_level
+        window = self._learn_scored_attempts(level=old)[-LEARN_LEVEL_WINDOW:]
+        if len(window) < LEARN_LEVEL_WINDOW:
+            return old
+        if old < LEARN_MAX_LEVEL and all(s >= LEARN_PROMOTE_SCORE for s in window):
+            self._learn_level = old + 1
+        elif old > 1 and all(s < LEARN_DEMOTE_SCORE for s in window):
+            self._learn_level = old - 1
+        return self._learn_level
+
+    def _record_learn_session(self, verdict, scored_by):
+        """Append one finished attempt to the profile and re-derive the level.
+
+        ``scored_by`` is "ai" when the vision model judged a real photo and
+        "sample" when the fallback verdict was displayed instead. Sample rows
+        are still stored so the practice is visible, but they never feed the
+        level (see _learn_scored_attempts).
+        """
+        photo = self._learn_photo_path
+        if photo:
+            try:
+                photo = os.path.relpath(photo, _APP_DIR)
+            except ValueError:          # different drive on Windows
+                pass
+        before = self._learn_level
+        self._learn_sessions.append({
+            "design":     verdict.get("name", "Rangoli"),
+            "complexity": verdict.get("complexity", ""),
+            "score":      verdict.get("score", 0),
+            "out_of":     verdict.get("out_of", 10),
+            "scored_by":  scored_by,
+            "lesson":     self._learn_lesson,
+            "level":      before,
+            "timestamp":  time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "photo":      photo or "",
+            "improvements": list(verdict.get("improvements", []))[:3],
+        })
+        after = self._learn_recompute_level()
+        self._save_learner_profile()
+
+        if scored_by != "ai":
+            self._learn_level_note = (
+                f"Practice saved. {self._learn_level_label()} unchanged — only "
+                f"AI-scored photos move the level.")
+        elif after > before:
+            self._learn_level_note = (
+                "\U0001f389 Moved up to " + self._learn_level_label() +
+                (" — the robot now lays only the dots!"
+                 if self._learn_is_pulli() else
+                 " — the robot will draw less next time."))
+        elif after < before:
+            self._learn_level_note = (
+                "Back to " + self._learn_level_label() +
+                " — the robot will draw more next time.")
+        elif after >= LEARN_MAX_LEVEL:
+            self._learn_level_note = (
+                "You're in Pulli Mode — the last level. The robot lays the "
+                "dots, you draw the rangoli.")
+        else:
+            # Promotion needs a consecutive run, so report the run still to go.
+            run = 0
+            for s in reversed(self._learn_scored_attempts(level=after)):
+                if s < LEARN_PROMOTE_SCORE:
+                    break
+                run += 1
+            need = max(1, LEARN_LEVEL_WINDOW - run)
+            self._learn_level_note = (
+                f"Still on {self._learn_level_label()} — {need} more rangoli "
+                f"scored {int(LEARN_PROMOTE_SCORE)}+ to move up.")
+        self.log_to_console(
+            f"Learn Mode: recorded {verdict.get('score')}/"
+            f"{verdict.get('out_of')} on '{verdict.get('name')}' "
+            f"({scored_by}) at level {before} → now level {after}.", "info")
+
+    # ── Learn Mode: who draws which part ─────────────────────────────────────
+
+    @staticmethod
+    def _learn_spread(count, start, length):
+        """``count`` indices spaced evenly inside ``[start, start + length)``.
+
+        Each index sits at the centre of its own equal block, so the picks are
+        interleaved with the gaps between them instead of hugging either end.
+        With count <= length the step is >= 1, which makes the results
+        distinct.
+        """
+        if count <= 0 or length <= 0:
+            return set()
+        count = min(count, length)
+        return {start + int((i + 0.5) * length / count) for i in range(count)}
+
+    def _learn_build_plan(self):
+        """Assign every part to the robot or the student, from the level.
+
+        The robot's share comes straight from LEARN_LEVELS: ~70% at Level 1
+        down to nothing at Level 5. Two properties matter beyond the raw split:
+
+        * The robot always takes part 0 whenever it draws at all, so the child
+          sees one worked example before being asked to copy anything.
+        * Whichever of the two has *fewer* parts is the one spread out over the
+          design. Spreading the majority is what bunches the minority into a
+          block at the far end — at Level 1 that would mean the child watches
+          the robot draw seven parts in a row and only then starts drawing.
+        * The child always keeps at least one part. A one-part design at 70%
+          rounds to "the robot draws all of it", which would walk the child
+          straight to the camera step to be scored on the robot's own work.
+          Where there is only one part it goes to the child and the robot
+          demonstrates nothing — no demo is better than no drawing.
+        """
+        n = len(self._learn_parts)
+        share = self._learn_level_meta().get("robot_share", 0.0)
+        k = max(0, min(n, int(round(n * share))))
+        if n >= 1:
+            k = min(k, n - 1)
+        if k <= 0:
+            picks = set()
+        elif k >= n:
+            picks = set(range(n))
+        else:
+            picks = {0}                     # the demonstration part
+            robot_rest, student_rest = k - 1, n - k
+            if robot_rest <= student_rest:
+                picks |= self._learn_spread(robot_rest, 1, n - 1)
+            else:
+                student = self._learn_spread(student_rest, 1, n - 1)
+                picks |= {i for i in range(1, n) if i not in student}
+        self._learn_owner = {i: ("robot" if i in picks else "student")
+                             for i in range(n)}
+        return picks
 
     def _learn_take_next(self):
-        """Claim the next part nobody is working on yet (None when exhausted)."""
+        """Claim the next unstarted part; return ``(idx, owner)``.
+
+        ``(None, None)`` once the design is exhausted. Ownership is read off
+        the level's plan instead of alternating, which is what makes the
+        difficulty progressive — see _learn_build_plan.
+        """
         if self._learn_next_free >= len(self._learn_parts):
-            return None
+            return None, None
         idx = self._learn_next_free
         self._learn_next_free += 1
-        return idx
+        return idx, self._learn_owner.get(idx, "student")
+
+    def _learn_advance(self, hint=None):
+        """Hand the next part to whoever the level's plan gives it to.
+
+        Single entry point for every turn change, so the student and the robot
+        can never both hold a part and the lesson always ends on the camera
+        step. ``hint`` is only surfaced when the next part is the student's.
+        """
+        idx, owner = self._learn_take_next()
+        if idx is None:
+            self._open_learn_camera_step()
+            return
+        if owner == "robot":
+            self._learn_student_idx = None
+            self._learn_start_robot(idx)
+            self._open_learn_robot_turn()
+            self._kid_set_mood("watch")
+        else:
+            self._learn_robot_idx = None
+            self._learn_student_idx = idx
+            if hint:
+                self.show_hint_popup(hint)
+            self._open_learn_step()
 
     @staticmethod
     def _learn_part_color(idx):
@@ -4884,8 +5976,16 @@ class ShapeApp:
             else:
                 prev.create_line(flat, fill="#d1d5db", width=1, smooth=True,
                                  tags="base")
-        try: prev.tag_raise("learn_robot")
-        except tk.TclError: pass
+        # Pulli Mode: once the scaffold is down it stays visible under every
+        # step, because the dots are the only thing the child is working from.
+        if self._learn_dots_laid:
+            for dx, dy in self._learn_dots:
+                x, y = self._learn_map(tf, dx, dy)
+                prev.create_oval(x - 3, y - 3, x + 3, y + 3, fill=ACCENT_AMBER,
+                                 outline="#ffffff", width=1, tags="base")
+        for tag in ("learn_dots", "learn_robot"):
+            try: prev.tag_raise(tag)
+            except tk.TclError: pass
 
     def _learn_status_text(self):
         if self._learn_robot_idx is not None:
@@ -4893,9 +5993,22 @@ class ShapeApp:
             return (f"\U0001f916 Robot is drawing part "
                     f"{self._learn_robot_idx + 1} ({name})… hold on, your next "
                     f"part comes up the moment it finishes.")
-        if self._learn_next_free < len(self._learn_parts):
-            return ("\U0001f916 Robot is waiting its turn — press Done when "
-                    "your part is finished.")
+        # In Pulli Mode the robot owns no parts at all, so "waiting its turn"
+        # would be a lie — its whole job is the dots. Gated on there actually
+        # being a scaffold: a symmetry lesson can also run at Level 5.
+        if self._learn_is_pulli() and self._learn_dots:
+            if not self._learn_dots_laid:
+                return (f"\U0001f916 Robot is laying the "
+                        f"{len(self._learn_dots)} pulli… the lines are yours "
+                        f"once the dots are down.")
+            return ("\U0001f916 Dots are down — the robot is finished. Every "
+                    "line from here is yours.")
+        remaining = sum(1 for i in range(self._learn_next_free,
+                                         len(self._learn_parts))
+                        if self._learn_owner.get(i) == "robot")
+        if remaining:
+            return (f"\U0001f916 Robot is waiting its turn — {remaining} more "
+                    f"part(s) to go. Press Done when your part is finished.")
         return "\U0001f916 Robot has finished all of its parts."
 
     def _learn_update_status(self):
@@ -4921,11 +6034,25 @@ class ShapeApp:
         total = len(self._learn_parts)
         col_name, col_hex = self._learn_part_color(idx)
         W, H = S(640), S(590)
+        nxt = self._learn_owner.get(self._learn_next_free)
+        after = ("then press Done and the robot takes the next one"
+                 if nxt == "robot" else
+                 "then press Done and the next part is yours too"
+                 if nxt else
+                 "then press Done — that's the last part")
         popup, body = self._learn_shell(
-            W, H, "Your turn — draw this part",
-            f"Part {idx + 1} of {total} of '{self._learn_design}' — draw the "
-            f"highlighted {col_name.lower()} part with your bottle, then press "
-            f"Done and the robot takes the next one.")
+            W, H,
+            self.kid_pick(f"Your turn! Bit {idx + 1} of {total} 🎨",
+                          f"Your turn — draw this part  ·  "
+                          f"{self._learn_level_label()}"),
+            self.kid_pick(
+                f"Copy the bright {col_name.lower()} bit with your magic "
+                f"bottle. Take your time — then tap the big green button!",
+                f"Part {idx + 1} of {total} of '{self._learn_design}' — draw "
+                f"the highlighted {col_name.lower()} part with your bottle, "
+                f"{after}."),
+            outline=KID_THEME["outline"] if self.kid_mode else ACCENT_GREEN,
+            mascot="idle")
 
         upper = tk.Frame(body, bg=BG_CARD)
         upper.pack(fill="both", expand=True)
@@ -4949,7 +6076,8 @@ class ShapeApp:
         tk.Label(chip, text=f"Your part: {col_name} powder", bg=BG_CARD,
                  fg=TEXT_PRIMARY, font=("Segoe UI", FS(11), "bold")).pack(side="left")
 
-        tk.Label(right, text="How to draw it:", bg=BG_CARD, fg=ACCENT_GREEN,
+        tk.Label(right, text=self.kid_pick("How to do it:", "How to draw it:"),
+                 bg=BG_CARD, fg=ACCENT_GREEN,
                  font=("Segoe UI", FS(11), "bold")).pack(anchor="w", pady=(S(0), S(6)))
         for i, line in enumerate(self._learn_step_instructions(idx), 1):
             r = tk.Frame(right, bg=BG_CARD)
@@ -4975,8 +6103,9 @@ class ShapeApp:
         btns = tk.Frame(body, bg=BG_CARD)
         btns.pack(fill="x", side="bottom", pady=(S(10), S(0)))
         self._color_button(
-            btns, "✓ Done drawing my part", self._learn_done_my_part,
-            ACCENT_GREEN, width=S(250), height=S(46), font_size=FS(13)).pack(side="left")
+            btns, self.kid_pick("✓ I did it!", "✓ Done drawing my part"),
+            self._learn_done_my_part, ACCENT_GREEN,
+            width=S(250), height=S(46), font_size=FS(13)).pack(side="left")
 
         self._learn_status = tk.Label(
             body, text="", bg=BG_CARD, fg=ACCENT_PURP,
@@ -5024,13 +6153,16 @@ class ShapeApp:
         self._learn_animate_robot(idx)
 
     def _learn_step_instructions(self, step):
-        return LEARN_STEP_SETS[step % len(LEARN_STEP_SETS)]
+        sets = LEARN_STEP_SETS_KID if self.kid_mode else LEARN_STEP_SETS
+        return sets[step % len(sets)]
 
     def _learn_done_my_part(self):
-        """Student finished their part — hand the turn to the robot and watch.
+        """Student finished their part — move on to whoever owns the next one.
 
-        The student's next part is NOT revealed yet: it pops up only once the
-        robot has finished, so the two of them strictly alternate.
+        Whether that is the robot or another part for the student is decided by
+        the level's plan, not by alternation: at Level 1 the robot takes most of
+        the follow-ups, and in Pulli Mode the student simply carries straight on
+        to their next part.
         """
         idx = self._learn_student_idx
         if idx is None:
@@ -5038,13 +6170,14 @@ class ShapeApp:
         self._learn_done_parts.add(idx)
         self._learn_student_idx = None
         self.log_to_console(f"Learn Mode: you finished part {idx + 1}.", "recv")
-
-        nxt = self._learn_take_next()
-        if nxt is None:
-            self._open_learn_camera_step()
-            return
-        self._learn_start_robot(nxt)
-        self._open_learn_robot_turn()
+        done, total = len(self._learn_done_parts), len(self._learn_parts)
+        # Advance first, then celebrate. _learn_advance destroys this popup to
+        # build the next one, and confetti drawn on a destroyed canvas is gone
+        # before anybody sees it — so the burst has to land on the new screen.
+        self._learn_advance()
+        self._kid_celebrate(
+            "That's the whole rangoli — amazing!" if done >= total else
+            f"Part {done} of {total} done! ⭐")
 
     def _learn_start_robot(self, idx):
         """Robot begins drawing part ``idx`` — for real if a port is connected,
@@ -5129,13 +6262,7 @@ class ShapeApp:
         self._learn_done_parts.add(idx)
         self._learn_robot_idx = None
         self.log_to_console(f"Learn Mode: robot finished part {idx + 1}.", "recv")
-
-        self._learn_student_idx = self._learn_take_next()
-        if self._learn_student_idx is None:
-            self._open_learn_camera_step()
-            return
-        self.show_hint_popup("Robot's done — your turn!")
-        self._open_learn_step()
+        self._learn_advance(hint="Robot's done — your turn!")
 
     def _open_learn_robot_error(self, idx):
         """The robot's part did not complete — never advance the student on a
@@ -5166,6 +6293,1172 @@ class ShapeApp:
             ACCENT_PURP, width=W-52, height=S(44), font_size=FS(12)).pack(pady=(S(10), S(8)))
         self._color_button(
             body, "I'll draw this part myself", _take_over,
+            ACCENT_GREEN, width=W-52, height=S(44), font_size=FS(12)).pack()
+
+    # ── Learn Mode: one-continuous-line visualisation ─────────────────────────
+    # A sikku (kambi) kolam is the claim that a whole design can be drawn as one
+    # unbroken line without lifting the bottle. That is a graph-theory claim, and
+    # this is it on screen: treat the design as a multigraph — stroke endpoints
+    # welded together are the vertices, the strokes themselves are the edges —
+    # then run the Euler test and animate the route it produces.
+    #
+    # The counter reports what the route ACTUALLY does. If a design needs four
+    # lines and three lifts, it says four lines and three lifts, and the panel
+    # says why (disconnected rings, or too many odd-degree vertices). A hardcoded
+    # "one line · 0 lifts" would be a fabricated result, which is worthless as
+    # evidence — the honest number and the reason for it is the real
+    # demonstration, and it is the same maths either way.
+
+    def _sikku_analyse(self, parts):
+        """Build the multigraph for ``parts`` and run the Euler test.
+
+        Returns a dict, or None when there is nothing to analyse. Vertices are
+        stroke endpoints welded within a tolerance scaled to the design, because
+        two strokes that meet at a petal tip are one junction even though their
+        float coordinates differ in the last few decimals.
+        """
+        strokes = [[(float(x), float(y)) for x, y in p]
+                   for p in parts if len(p) >= 2]
+        if not strokes:
+            return None
+
+        pts = [pt for s in strokes for pt in s]
+        xs, ys = [x for x, _ in pts], [y for _, y in pts]
+        span = max(max(xs) - min(xs), max(ys) - min(ys), 1e-9)
+        tol = max(1.0, span * SIKKU_WELD_FRAC)
+
+        verts = []
+        def vid(pt):
+            for i, v in enumerate(verts):
+                if math.dist(pt, v) <= tol:
+                    return i
+            verts.append(pt)
+            return len(verts) - 1
+
+        # edges[i] = (vertex_a, vertex_b, stroke_index)
+        edges = [(vid(s[0]), vid(s[-1]), i) for i, s in enumerate(strokes)]
+
+        deg = [0] * len(verts)
+        adj = {i: [] for i in range(len(verts))}
+        for ei, (a, b, _) in enumerate(edges):
+            deg[a] += 1
+            deg[b] += 1          # a == b (a closed stroke) correctly scores 2
+            adj[a].append((b, ei))
+            if a != b:
+                adj[b].append((a, ei))
+            else:
+                # A self-loop is incident twice, so it must be walkable from
+                # either "side" or Hierholzer can miss it.
+                adj[a].append((b, ei))
+
+        # connected components over vertices that actually carry an edge
+        seen, comps = set(), []
+        for v in range(len(verts)):
+            if v in seen or deg[v] == 0:
+                continue
+            stack, comp = [v], []
+            seen.add(v)
+            while stack:
+                u = stack.pop()
+                comp.append(u)
+                for (o, _) in adj[u]:
+                    if o not in seen:
+                        seen.add(o)
+                        stack.append(o)
+            comps.append(comp)
+
+        # Euler: a connected component with 2k odd-degree vertices splits into
+        # max(1, k) open trails; with none it closes into a single circuit.
+        odd_total = sum(1 for d in deg if d % 2)
+        min_trails = 0
+        for comp in comps:
+            odd = sum(1 for v in comp if deg[v] % 2)
+            min_trails += max(1, odd // 2)
+
+        if not comps:
+            verdict, why = "none", "This design has no strokes to trace."
+        elif len(comps) == 1 and odd_total == 0:
+            verdict = "circuit"
+            why = ("Every junction has an even number of lines meeting it, and "
+                   "the whole design is connected — so it closes into one "
+                   "unbroken loop. This is a true sikku kolam.")
+        elif len(comps) == 1 and odd_total == 2:
+            verdict = "path"
+            why = ("Exactly two junctions have an odd number of lines meeting "
+                   "them, so one unbroken line works — it just starts at one "
+                   "of those two and ends at the other.")
+        elif len(comps) == 1:
+            verdict = "multi"
+            why = (f"{odd_total} junctions have an odd number of lines meeting "
+                   f"them. Euler's rule allows at most 2, so this design needs "
+                   f"{min_trails} separate lines — one for each pair.")
+        else:
+            verdict = "split"
+            why = (f"The design falls into {len(comps)} pieces that never touch "
+                   f"each other, so the bottle has to be lifted between them. "
+                   f"{min_trails} lines in total.")
+
+        return {"strokes": strokes, "edges": edges, "adj": adj, "deg": deg,
+                "verts": verts, "components": len(comps), "odd": odd_total,
+                "min_trails": min_trails, "verdict": verdict, "why": why,
+                "tol": tol}
+
+    @staticmethod
+    def _sikku_route(g):
+        """Walk the graph into as few continuous trails as possible.
+
+        Hierholzer's algorithm, generalised: take a maximal walk, then splice
+        any leftover closed loops into it at the first vertex that still has
+        unused edges. Starting from an odd-degree vertex whenever one is left is
+        what keeps the number of trails down to Euler's minimum — start in the
+        middle of an odd-degree component and you strand edges and pay an extra
+        lift for them.
+
+        Returns [[(edge_index, from_vertex), …], …] — one list per trail.
+        """
+        edges, adj = g["edges"], g["adj"]
+        used = [False] * len(edges)
+
+        def live_deg(v):
+            return sum(1 for (_, ei) in adj[v] if not used[ei])
+
+        def walk_from(v):
+            """Maximal walk of unused edges; returns (vertices, edge steps)."""
+            path, steps = [v], []
+            while True:
+                nxt = next(((o, ei) for (o, ei) in adj[v] if not used[ei]), None)
+                if nxt is None:
+                    return path, steps
+                o, ei = nxt
+                used[ei] = True
+                steps.append((ei, v))
+                v = o
+                path.append(v)
+
+        trails = []
+        while not all(used):
+            starts = [v for v in adj if live_deg(v) > 0]
+            if not starts:
+                break
+            odd = [v for v in starts if live_deg(v) % 2]
+            start = odd[0] if odd else starts[0]
+
+            path, steps = walk_from(start)
+            # splice leftover loops in, so one trail absorbs as much as it can
+            i = 0
+            while i < len(path):
+                u = path[i]
+                if live_deg(u) > 0:
+                    sub_path, sub_steps = walk_from(u)
+                    if sub_path[-1] == u:                 # a closed loop: splice
+                        path = path[:i + 1] + sub_path[1:] + path[i + 1:]
+                        steps = steps[:i] + sub_steps + steps[i:]
+                        continue                          # re-check this vertex
+                    # Not a loop — it would break the trail's continuity. Give
+                    # the edges back and let them become their own trail.
+                    for ei, _ in sub_steps:
+                        used[ei] = False
+                i += 1
+            trails.append(steps)
+        return trails
+
+    def _sikku_trail_points(self, g, trail):
+        """Concatenate a trail's strokes into one point list, in walk order."""
+        out = []
+        for ei, from_v in trail:
+            a, b, si = g["edges"][ei]
+            stroke = g["strokes"][si]
+            pts = stroke if from_v == a else list(reversed(stroke))
+            if out and math.dist(out[-1], pts[0]) <= g["tol"]:
+                pts = pts[1:]          # don't repeat the shared junction
+            out.extend(pts)
+        return out
+
+    def _sikku_dot_hit_radius(self, dots_px):
+        """How close the pen must pass for a dot to count as covered.
+
+        Derived from the actual dot spacing on screen so it means the same thing
+        on a dense grid and a sparse one.
+        """
+        if len(dots_px) < 2:
+            return 6.0
+        near = []
+        for i, a in enumerate(dots_px):
+            d = min((math.dist(a, b) for j, b in enumerate(dots_px) if j != i),
+                    default=0.0)
+            if d > 0:
+                near.append(d)
+        if not near:
+            return 6.0
+        near.sort()
+        return max(4.0, near[len(near) // 2] * SIKKU_DOT_HIT_FRAC / 2.0)
+
+    def _sikku_counter_text(self):
+        """The live counter — "one line · 214 dots · 0 lifts".
+
+        Every number is read off the route being animated, not asserted.
+        """
+        started = min(self._sikku_lifts + 1, max(1, len(self._sikku_trails)))
+        lines = ("one line" if started == 1 else f"{started} lines")
+        hit, total = len(self._sikku_dots_hit), len(self._sikku_dots)
+        dots = (f"{total} dots" if hit >= total and total
+                else f"{hit} of {total} dots")
+        lifts = f"{self._sikku_lifts} lift" + ("" if self._sikku_lifts == 1 else "s")
+        return f"{lines}  ·  {dots}  ·  {lifts}"
+
+    def _sikku_update_counter(self):
+        lbl = self._sikku_counter
+        if lbl is None:
+            return
+        try:
+            if lbl.winfo_exists():
+                lbl.configure(text=self._sikku_counter_text())
+        except tk.TclError:
+            self._sikku_counter = None
+
+    def _open_learn_oneline(self):
+        """Animate the design as the fewest continuous lines Euler allows,
+        with a live counter and the graph reasoning beside it."""
+        g = self._sikku_analyse(self._learn_parts)
+        if g is None:
+            self.show_hint_popup("Nothing in that design to trace")
+            self._open_learn_gallery()
+            return
+        trails = self._sikku_route(g)
+        self._sikku_g, self._sikku_trails = g, trails
+
+        one = len(trails) == 1
+        # "One-Line Wizard" is earned by actually finding a design that draws in
+        # one line, so record the evidence the sticker rule reads.
+        if one and self._learn_design and \
+                self._learn_design not in self._kid_oneline_solved:
+            self._kid_oneline_solved.append(self._learn_design)
+            self._save_learner_profile()
+            self._kid_sound("badge")
+
+        W, H = S(720), S(600)
+        _, body = self._learn_shell(
+            W, H,
+            self.kid_pick("The magic one-line trick", "One continuous line"),
+            self.kid_pick(
+                f"Can '{self._learn_design}' be drawn without lifting your "
+                f"magic bottle? Let's find out! Watch the little bottle walk "
+                f"the line.",
+                f"'{self._learn_design}' traced as the fewest unbroken lines "
+                f"that are mathematically possible. Watch where the line has "
+                f"to stop."),
+            outline=ACCENT_GREEN if one else ACCENT_AMBER,
+            mascot="cheer" if one else "watch")
+        if self.kid_mode:
+            self._kid_set_mood(
+                "cheer" if one else "watch",
+                "One line, no lifting — that's the magic trick! 🪄" if one else
+                f"This one needs {len(trails)} lines. Watch where it has to "
+                f"stop!")
+
+        upper = tk.Frame(body, bg=BG_CARD)
+        upper.pack(fill="both", expand=True)
+
+        PV = S(300)
+        prev = tk.Canvas(upper, width=PV, height=PV, bg=CANVAS_BG,
+                         highlightthickness=0)
+        prev.pack(side="left", anchor="n", padx=(S(0), S(16)))
+        self._sikku_prev = prev
+        half = PV / 2.0
+        tf = self._learn_tf_for(self._learn_parts, half, half, half * 0.88)
+        self._sikku_tf = tf
+
+        # ghost of the finished design, so the highlight reads as progress
+        for path in self._learn_parts:
+            if len(path) < 2:
+                continue
+            flat = [c for pt in path for c in self._learn_map(tf, *pt)]
+            prev.create_line(flat, fill="#dcdce6", width=2, smooth=True)
+
+        # the pulli, same scaffold Pulli Mode lays
+        self._learn_dots = self._learn_pulli_dots()
+        self._sikku_dots = [self._learn_map(tf, x, y) for x, y in self._learn_dots]
+        self._sikku_dot_r = self._sikku_dot_hit_radius(self._sikku_dots)
+        self._sikku_dots_hit = set()
+        for dx, dy in self._sikku_dots:
+            prev.create_oval(dx - 2.5, dy - 2.5, dx + 2.5, dy + 2.5,
+                             fill="#b9b9c8", outline="", tags="sikku_dot")
+
+        # ── the graph panel: the maths, in words ──────────────────────────────
+        right = tk.Frame(upper, bg=BG_CARD)
+        right.pack(side="left", fill="both", expand=True)
+
+        verdict_txt = ("✓ One unbroken line — a true sikku kolam"
+                       if one else
+                       f"✗ Needs {len(trails)} lines, {len(trails) - 1} lifts")
+        tk.Label(right, text=verdict_txt, bg=BG_CARD,
+                 fg=ACCENT_GREEN if one else ACCENT_AMBER,
+                 font=("Segoe UI", FS(12), "bold"), justify="left",
+                 wraplength=W-PV-90).pack(anchor="w", pady=(S(0), S(6)))
+        tk.Label(right, text=g["why"], bg=BG_CARD, fg=TEXT_PRIMARY,
+                 font=("Segoe UI", FS(9)), justify="left",
+                 wraplength=W-PV-90).pack(anchor="w", pady=(S(0), S(10)))
+
+        tk.Label(right, text="The graph", bg=BG_CARD, fg=ACCENT_CYAN,
+                 font=("Segoe UI", FS(10), "bold")).pack(anchor="w")
+        rows = [
+            ("Junctions (vertices)", str(len(g["verts"]))),
+            ("Strokes (edges)",      str(len(g["edges"]))),
+            ("Connected pieces",     str(g["components"])),
+            ("Odd-degree junctions", str(g["odd"])),
+            ("Euler's minimum",      f"{g['min_trails']} line(s)"),
+            ("This route walks",     f"{len(trails)} line(s)"),
+        ]
+        for k, v in rows:
+            r = tk.Frame(right, bg=BG_CARD)
+            r.pack(fill="x", anchor="w")
+            tk.Label(r, text=k, bg=BG_CARD, fg=TEXT_DIM,
+                     font=("Segoe UI", FS(9))).pack(side="left")
+            tk.Label(r, text=v, bg=BG_CARD, fg=TEXT_PRIMARY,
+                     font=("Segoe UI", FS(9), "bold")).pack(side="right")
+
+        tk.Label(right,
+                 text="Euler's rule: a shape can be drawn without lifting only "
+                      "if it is all one piece and at most two junctions have an "
+                      "odd number of lines meeting them.",
+                 bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(8)),
+                 justify="left", wraplength=W-PV-90).pack(anchor="w",
+                                                          pady=(S(10), 0))
+
+        # ── the live counter ─────────────────────────────────────────────────
+        self._sikku_lifts = 0
+        self._sikku_counter = tk.Label(
+            body, text="", bg=BG_CARD, fg=ACCENT_GREEN,
+            font=("Consolas", FS(15), "bold"), anchor="w")
+        self._sikku_counter.pack(fill="x", side="bottom", pady=(S(8), S(0)))
+
+        btns = tk.Frame(body, bg=BG_CARD)
+        btns.pack(fill="x", side="bottom", pady=(S(10), S(0)))
+        self._sikku_play_btn = self._color_button(
+            btns, "⏸ Pause", self._sikku_toggle_play, ACCENT_PURP,
+            width=S(150), height=S(40), font_size=FS(11))
+        self._sikku_play_btn.pack(side="left")
+        self._color_button(
+            btns, "↻ Replay", self._sikku_replay, ACCENT_CYAN,
+            width=S(140), height=S(40), font_size=FS(11)).pack(side="left",
+                                                               padx=S(8))
+        back = tk.Label(btns, text="← Pick another design", bg=BG_CARD,
+                        fg=TEXT_DIM, font=("Segoe UI", FS(9), "bold"),
+                        cursor="hand2")
+        back.pack(side="right")
+        back.bind("<Button-1>", lambda e: self._open_learn_gallery())
+
+        self.log_to_console(
+            f"One-line view: '{self._learn_design}' — V={len(g['verts'])}, "
+            f"E={len(g['edges'])}, pieces={g['components']}, "
+            f"odd={g['odd']} → {len(trails)} line(s), {len(trails) - 1} lift(s) "
+            f"[{g['verdict']}].", "info")
+        self._sikku_start()
+
+    def _sikku_start(self):
+        """Build the frame stream in preview space and begin animating."""
+        g, trails, tf = self._sikku_g, self._sikku_trails, self._sikku_tf
+        if not (g and trails and tf):
+            return
+        # Map to preview coordinates first, then densify, so the pen moves at an
+        # even speed on screen rather than in design millimetres.
+        strokes = [([self._learn_map(tf, x, y)
+                     for x, y in self._sikku_trail_points(g, t)], True)
+                   for t in trails]
+        self._sikku_frames = self._frames_from_strokes(strokes, max_frames=2600)
+        self._sikku_i = 0
+        self._sikku_last = None
+        self._sikku_lifts = 0
+        self._sikku_dots_hit = set()
+        self._sikku_running = True
+        self._kid_clear_sparkles()
+        try:
+            self._sikku_prev.delete("sikku_trail")
+            self._sikku_prev.delete("sikku_pen")
+            self._sikku_prev.delete("sikku_spark")
+        except tk.TclError:
+            pass
+        self._sikku_update_counter()
+        self._sikku_tick()
+
+    def _sikku_stop(self):
+        self._sikku_running = False
+        aid = self._sikku_after
+        if aid is not None:
+            try: self.root.after_cancel(aid)
+            except Exception: pass
+            self._sikku_after = None
+
+    def _sikku_toggle_play(self):
+        if self._sikku_running:
+            self._sikku_stop()
+            label = "▶ Play"
+        else:
+            if self._sikku_i >= len(self._sikku_frames):
+                self._sikku_start()
+            else:
+                self._sikku_running = True
+                self._sikku_tick()
+            label = "⏸ Pause"
+        try:
+            self._sikku_play_btn.configure(text=label)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _sikku_replay(self):
+        self._sikku_stop()
+        self._sikku_start()
+        try:
+            self._sikku_play_btn.configure(text="⏸ Pause")
+        except (tk.TclError, AttributeError):
+            pass
+
+    @staticmethod
+    def _sikku_ramp(t):
+        """Cyan → purple → pink → amber along the route, so the *order* the line
+        is drawn in is visible and not just its shape."""
+        stops = ["#22d3ee", "#a78bfa", "#f472b6", "#f97316"]
+        t = max(0.0, min(0.999999, t)) * (len(stops) - 1)
+        i = int(t)
+        f = t - i
+        a = stops[i].lstrip("#")
+        b = stops[i + 1].lstrip("#")
+        return "#%02x%02x%02x" % tuple(
+            int(int(a[k:k+2], 16) + (int(b[k:k+2], 16) - int(a[k:k+2], 16)) * f)
+            for k in (0, 2, 4))
+
+    def _sikku_tick(self):
+        """One frame of the line animation, counter included."""
+        if not self._sikku_running:
+            return
+        prev = self._sikku_prev
+        try:
+            alive = prev is not None and prev.winfo_exists()
+        except tk.TclError:
+            alive = False
+        if not alive:
+            self._sikku_stop()
+            return
+
+        frames = self._sikku_frames
+        i = self._sikku_i
+        if i >= len(frames):
+            self._sikku_running = False
+            self._sikku_after = None
+            try:
+                prev.delete("sikku_pen")
+            except tk.TclError:
+                pass
+            self._sikku_update_counter()
+            try:
+                self._sikku_play_btn.configure(text="↻ Replay")
+            except (tk.TclError, AttributeError):
+                pass
+            n = len(self._sikku_trails)
+            self.log_to_console(
+                f"One-line view: finished — {self._sikku_counter_text()}",
+                "recv" if n == 1 else "info")
+            return
+
+        pt = frames[i]
+        self._sikku_i = i + 1
+
+        if pt is None:
+            # A pen lift: the line genuinely stops here. Count it and mark the
+            # break on screen, because the break is the point of the lesson.
+            self._sikku_lifts += 1
+            if self._sikku_last is not None:
+                lx, ly = self._sikku_last
+                prev.create_oval(lx - 4, ly - 4, lx + 4, ly + 4,
+                                 outline=ACCENT_PINK, width=2, fill="",
+                                 tags="sikku_trail")
+            self._sikku_last = None
+            self._sikku_update_counter()
+            self._sikku_after = self.root.after(140, self._sikku_tick)
+            return
+
+        x, y = pt
+        if self._sikku_last is not None:
+            prev.create_line(self._sikku_last[0], self._sikku_last[1], x, y,
+                             fill=self._sikku_ramp(i / max(1, len(frames))),
+                             width=4, capstyle="round", tags="sikku_trail")
+        self._sikku_last = (x, y)
+
+        # light up any pulli the line has now reached
+        r = self._sikku_dot_r
+        for di, (dx, dy) in enumerate(self._sikku_dots):
+            if di not in self._sikku_dots_hit and math.dist((x, y), (dx, dy)) <= r:
+                self._sikku_dots_hit.add(di)
+                prev.create_oval(dx - 4, dy - 4, dx + 4, dy + 4,
+                                 fill=ACCENT_AMBER, outline="#ffffff", width=1,
+                                 tags="sikku_dot")
+
+        try:
+            if self.kid_mode:
+                if i % 4 == 0:
+                    self._kid_sparkle(prev, x, y, tag="sikku_spark")
+                self._kid_draw_buddy(prev, x, y, i, tag="sikku_pen", scale=0.8)
+            else:
+                prev.delete("sikku_pen")
+                prev.create_oval(x - 6, y - 6, x + 6, y + 6, fill=ACCENT_GREEN,
+                                 outline="#ffffff", width=2, tags="sikku_pen")
+            prev.tag_raise("sikku_dot")
+            prev.tag_raise("sikku_pen")
+        except tk.TclError:
+            pass
+
+        self._sikku_update_counter()
+        self._sikku_after = self.root.after(8, self._sikku_tick)
+
+    # ── Learn Mode: symmetry challenges ───────────────────────────────────────
+    # See LEARN_SYMMETRY_BY_LEVEL for why this lesson type exists. The robot
+    # draws one fundamental domain of a part; the child draws its reflections,
+    # with the mirror lines and the target outlines both on screen.
+
+    def _learn_symmetry_mode(self):
+        """Mirror mode for this learner — more axes as the level rises."""
+        return LEARN_SYMMETRY_BY_LEVEL.get(self._learn_level, "2-way")
+
+    @staticmethod
+    def _polyline_len(path):
+        return sum(math.dist(path[i], path[i + 1])
+                   for i in range(len(path) - 1))
+
+    @classmethod
+    def _clip_polyline(cls, path, inside, min_len):
+        """The contiguous runs of ``path`` that lie inside a domain.
+
+        A part can cross the mirror line several times (a ring crosses twice, a
+        petal burst many more), so this returns a *list* of runs rather than one
+        path. Runs shorter than ``min_len`` are dropped — clipping almost always
+        leaves a stray point or two right on the axis, and they would otherwise
+        become their own unreachable "draw this" target.
+        """
+        runs, cur = [], []
+        for pt in path:
+            if inside(*pt):
+                cur.append(pt)
+            else:
+                if len(cur) >= 2 and cls._polyline_len(cur) >= min_len:
+                    runs.append(cur)
+                cur = []
+        if len(cur) >= 2 and cls._polyline_len(cur) >= min_len:
+            runs.append(cur)
+        return runs
+
+    def _learn_symmetry_pairs(self, mode=None):
+        """Build the challenge: [(robot_half, mirrored_targets), …].
+
+        For each part of the design, the robot's half is the piece of it inside
+        the mode's fundamental domain, and the child's targets are that piece
+        reflected by every transform of the mode. On a symmetric design the
+        reflections land on the part's own other halves, so the child is
+        completing the real rangoli and not an invented shape.
+
+        Parts that don't reach into the domain are skipped: at 8-way a petal on
+        the far side of the design has nothing in the octant, and asking the
+        robot to draw "nothing" is not a lesson.
+        """
+        mode = mode or self._learn_symmetry_mode()
+        cx, cy = self._learn_center
+        inside = self._mirror_axis_test(mode, cx, cy)
+        tfs = self._mirror_transforms(mode=mode, cx=cx, cy=cy)
+
+        pts = [pt for p in self._learn_parts for pt in p]
+        xs, ys = [x for x, _ in pts], [y for _, y in pts]
+        span = max(max(xs) - min(xs), max(ys) - min(ys), 1e-9)
+        min_len = span * LEARN_SYM_MIN_LEN_FRAC
+
+        pairs = []
+        for idx, part in enumerate(self._learn_parts):
+            runs = self._clip_polyline(part, inside, min_len)
+            if not runs:
+                continue
+            pairs.append({
+                "part":   idx,
+                "robot":  runs,
+                "target": [[f(x, y) for x, y in run]
+                           for f in tfs for run in runs],
+            })
+            if len(pairs) >= LEARN_SYM_MAX_PAIRS:
+                break
+        return pairs
+
+    def _learn_start_symmetry(self, name):
+        """Begin a symmetry challenge on the chosen design."""
+        mode = self._learn_symmetry_mode()
+        pairs = self._learn_symmetry_pairs(mode)
+        if not pairs and mode != "2-way":
+            # An octant can miss a design's geometry entirely. One mirror line
+            # always has something to work with, so fall back rather than
+            # dead-end the child on an empty lesson.
+            self.log_to_console(
+                f"Learn Mode: '{name}' has nothing inside the {mode} wedge — "
+                f"falling back to one mirror line.", "info")
+            mode = "2-way"
+            pairs = self._learn_symmetry_pairs(mode)
+        if not pairs:
+            self.show_hint_popup("That design has no symmetry to practise")
+            self._open_learn_gallery()
+            return
+
+        self._learn_sym_mode  = mode
+        self._learn_sym_pairs = pairs
+        self._learn_sym_idx   = 0
+        self.log_to_console(
+            f"Learn Mode: symmetry challenge on '{name}' — {mode} "
+            f"({LEARN_SYMMETRY_LABELS[mode]}), {len(pairs)} half/halves to "
+            f"complete.", "info")
+        self._open_learn_symmetry_robot_turn()
+
+    def _learn_sym_pair(self):
+        if 0 <= self._learn_sym_idx < len(self._learn_sym_pairs):
+            return self._learn_sym_pairs[self._learn_sym_idx]
+        return None
+
+    def _learn_render_symmetry(self, show_target):
+        """Draw the symmetry preview: the whole design ghosted, the mirror lines
+        dashed through it, the robot's half bold, and — once the robot has
+        finished — the child's target halves outlined so they can see the shape
+        they are aiming for."""
+        prev, tf = self._learn_prev, self._learn_tf
+        pair = self._learn_sym_pair()
+        if prev is None or tf is None or pair is None:
+            return
+        try:
+            if not prev.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        prev.delete("base")
+
+        # the rest of the design, faint, for context
+        for idx, path in enumerate(self._learn_parts):
+            if len(path) < 2 or idx == pair["part"]:
+                continue
+            flat = [c for pt in path for c in self._learn_map(tf, *pt)]
+            prev.create_line(flat, fill="#e8e8ef", width=1, smooth=True,
+                             tags="base")
+
+        # the mirror lines — the thing the lesson is actually about
+        cx, cy = self._learn_center
+        pts = [pt for p in self._learn_parts for pt in p]
+        xs, ys = [x for x, _ in pts], [y for _, y in pts]
+        reach = max(max(xs) - min(xs), max(ys) - min(ys), 1.0) * 0.62
+        for (a, b) in self._mirror_axis_lines(self._learn_sym_mode, cx, cy, reach):
+            ax, ay = self._learn_map(tf, *a)
+            bx, by = self._learn_map(tf, *b)
+            prev.create_line(ax, ay, bx, by, fill=ACCENT_CYAN, width=1,
+                             dash=(3, 3), tags="base")
+
+        hexc = self._learn_part_color(pair["part"])[1]
+        # the child's targets, outlined
+        if show_target:
+            for run in pair["target"]:
+                flat = [c for pt in run for c in self._learn_map(tf, *pt)]
+                prev.create_line(flat, fill=self._lighten(hexc, 45), width=3,
+                                 smooth=True, capstyle="round", dash=(5, 4),
+                                 tags="base")
+        # the robot's half, solid
+        for run in pair["robot"]:
+            flat = [c for pt in run for c in self._learn_map(tf, *pt)]
+            prev.create_line(flat, fill=hexc, width=4, smooth=True,
+                             capstyle="round", tags="base")
+        try: prev.tag_raise("learn_robot")
+        except tk.TclError: pass
+
+    def _open_learn_symmetry_robot_turn(self):
+        """The robot draws its half; the child watches the mirror line."""
+        pair = self._learn_sym_pair()
+        if pair is None:
+            self._open_learn_camera_step()
+            return
+        n, total = self._learn_sym_idx + 1, len(self._learn_sym_pairs)
+        mode = self._learn_sym_mode
+        W, H = S(560), S(520)
+        _, body = self._learn_shell(
+            W, H, f"Symmetry {n} of {total} — watch the robot's half",
+            f"The dashed cyan line is the mirror. The robot is drawing the "
+            f"{self._learn_part_color(pair['part'])[0].lower()} shape on one "
+            f"side only — you'll draw its reflection across "
+            f"{LEARN_SYMMETRY_LABELS[mode]}.", outline=ACCENT_PURP)
+
+        prev = tk.Canvas(body, width=S(230), height=S(230), bg=CANVAS_BG,
+                         highlightthickness=0)
+        prev.pack(pady=(S(2), S(10)))
+        self._learn_prev = prev
+        self._learn_tf = self._learn_tf_for(self._learn_parts, 115, 115, 100)
+        self._learn_render_symmetry(show_target=False)
+
+        self._learn_status = tk.Label(
+            body, text="\U0001f916 Robot is drawing its half…", bg=BG_CARD,
+            fg=ACCENT_PURP, font=("Segoe UI", FS(10), "bold"),
+            wraplength=W-70, justify="center")
+        self._learn_status.pack(side="bottom")
+
+        self._learn_start_symmetry_robot(pair)
+        self._learn_animate_symmetry(pair)
+
+    def _learn_start_symmetry_robot(self, pair):
+        """Stream the robot's half to the machine, if one is connected."""
+        self._learn_streaming = False
+        if self.port_var.get() and not self.is_sending:
+            _SPEED_MAP = {"Aqua Low": 50, "Super Low": 100,
+                          "Low (default)": 150, "Medium": 200, "High": 250}
+            f = _SPEED_MAP.get(self.feed_rate.get(), 150)
+            lines = ["$X", "G21", "G90", f"F{f}"]
+            lines += self._paths_gcode_lines(pair["robot"], f)
+            lines += [f"G1 Z0.00 F{f}", "G1 X0", "G1 Y0"]
+            self._pending_raw_gcode = lines
+            self._on_send_complete = self._learn_symmetry_robot_finished
+            self._learn_streaming = True
+            self.log_to_console(
+                f"Learn Mode: robot drawing the symmetry half of part "
+                f"{pair['part'] + 1}.", "info")
+            self.start_gcode_streaming()
+        else:
+            why = ("robot is busy with another job"
+                   if self.port_var.get() else "no robot connected")
+            self.log_to_console(
+                f"Learn Mode: {why} — tracing the symmetry half on screen "
+                f"instead.", "info")
+
+    def _learn_animate_symmetry(self, pair):
+        """Trace the robot's half into the preview, run by run.
+
+        Clipping a part to the mirror domain can leave several separate runs, so
+        this cannot reuse _learn_anim_step: that draws one polyline through
+        every point and would stitch the runs together with connector lines the
+        robot never draws. It also completes into _learn_robot_finished, which
+        is the wrong end of the lesson.
+        """
+        if self._learn_anim_id is not None:
+            try: self.root.after_cancel(self._learn_anim_id)
+            except Exception: pass
+            self._learn_anim_id = None
+        if self._learn_prev is None or self._learn_tf is None:
+            return
+        self._learn_prev.delete("learn_robot")
+        self._learn_sym_runs = [
+            [self._learn_map(self._learn_tf, x, y) for x, y in run]
+            for run in pair["robot"] if len(run) >= 2]
+        self._learn_cur_col = self._learn_part_color(pair["part"])[1]
+        if not self._learn_sym_runs:
+            if not self._learn_streaming:
+                self._learn_symmetry_robot_finished()
+            return
+        total = sum(len(r) for r in self._learn_sym_runs)
+        self._learn_sym_anim_step(0, 1, max(1, total // 45))
+
+    def _learn_sym_anim_step(self, ri, j, step):
+        prev = self._learn_prev
+        try:
+            alive = prev is not None and prev.winfo_exists()
+        except tk.TclError:
+            alive = False
+        if not alive:
+            self._learn_anim_id = None
+            return
+        runs = self._learn_sym_runs
+        if ri >= len(runs):
+            self._learn_anim_id = None
+            return
+        prev.delete("learn_robot")
+        for done_run in runs[:ri]:               # runs already traced
+            flat = [c for pt in done_run for c in pt]
+            if len(flat) >= 4:
+                prev.create_line(flat, fill=self._learn_cur_col, width=4,
+                                 smooth=True, capstyle="round",
+                                 tags="learn_robot")
+        flat = [c for pt in runs[ri][:j + 1] for c in pt]
+        if len(flat) >= 4:
+            prev.create_line(flat, fill=self._learn_cur_col, width=4,
+                             smooth=True, capstyle="round", tags="learn_robot")
+
+        if j < len(runs[ri]) - 1:
+            nxt = min(j + step, len(runs[ri]) - 1)
+            self._learn_anim_id = self.root.after(
+                16, lambda: self._learn_sym_anim_step(ri, nxt, step))
+        elif ri + 1 < len(runs):
+            self._learn_anim_id = self.root.after(
+                120, lambda: self._learn_sym_anim_step(ri + 1, 1, step))
+        else:
+            self._learn_anim_id = None
+            # With no robot attached the on-screen trace IS the robot's half.
+            if not self._learn_streaming:
+                self._learn_symmetry_robot_finished()
+
+    def _learn_symmetry_robot_finished(self, ok=True):
+        """Robot's half is down — now the child draws the reflection."""
+        self._learn_streaming = False
+        if not ok:
+            self.log_to_console(
+                "Learn Mode: the robot's symmetry half did NOT complete — see "
+                "the GRBL log. Holding the lesson here.", "err")
+            self._open_learn_symmetry_error()
+            return
+        self._open_learn_symmetry_step()
+
+    def _open_learn_symmetry_error(self):
+        """The robot's half failed — retry it or take it over by hand."""
+        W, H = S(520), S(330)
+        _, body = self._learn_shell(
+            W, H, "The robot didn't finish its half",
+            "GRBL reported a problem part-way through the robot's half of this "
+            "symmetry challenge. Check the Log, make sure the robot is "
+            "connected and unclogged, then retry.", outline=ACCENT_PINK)
+        self._color_button(
+            body, "↻ Draw that half again", self._open_learn_symmetry_robot_turn,
+            ACCENT_PURP, width=W-52, height=S(44), font_size=FS(12)).pack(
+                pady=(S(10), S(8)))
+        self._color_button(
+            body, "Carry on — I'll draw both halves", self._open_learn_symmetry_step,
+            ACCENT_GREEN, width=W-52, height=S(44), font_size=FS(12)).pack()
+
+    def _open_learn_symmetry_step(self):
+        """The child's turn: draw the mirrored half/halves."""
+        pair = self._learn_sym_pair()
+        if pair is None:
+            self._open_learn_camera_step()
+            return
+        n, total = self._learn_sym_idx + 1, len(self._learn_sym_pairs)
+        mode = self._learn_sym_mode
+        col_name, col_hex = self._learn_part_color(pair["part"])
+        copies = len(pair["target"])
+        W, H = S(650), S(600)
+        _, body = self._learn_shell(
+            W, H,
+            self.kid_pick(f"Mirror time! {n} of {total} 🦋",
+                          f"Your turn — mirror it  ·  "
+                          f"{self._learn_level_label()}"),
+            self.kid_pick(
+                f"The robot drew the solid {col_name.lower()} bit. Draw the "
+                f"same thing on the other side of the dotted mirror line — "
+                f"{'there is 1 to do' if copies == 1 else f'there are {copies} to do'}!",
+                f"Symmetry {n} of {total}. The robot's {col_name.lower()} half "
+                f"is solid; the dashed outline is where your "
+                f"{'reflection goes' if copies == 1 else f'{copies} reflections go'}"
+                f". Draw across the cyan mirror line."),
+            outline=KID_THEME["outline"] if self.kid_mode else ACCENT_CYAN,
+            mascot="idle")
+
+        upper = tk.Frame(body, bg=BG_CARD)
+        upper.pack(fill="both", expand=True)
+
+        prev = tk.Canvas(upper, width=S(240), height=S(240), bg=CANVAS_BG,
+                         highlightthickness=0)
+        prev.pack(side="left", anchor="n", padx=(S(0), S(16)))
+        self._learn_prev = prev
+        self._learn_tf = self._learn_tf_for(self._learn_parts, 120, 120, 104)
+        self._learn_render_symmetry(show_target=True)
+
+        right = tk.Frame(upper, bg=BG_CARD)
+        right.pack(side="left", fill="both", expand=True)
+
+        chip = tk.Frame(right, bg=BG_CARD)
+        chip.pack(fill="x", anchor="w", pady=(S(0), S(8)))
+        sw = tk.Canvas(chip, width=S(18), height=S(18), bg=BG_CARD,
+                       highlightthickness=0)
+        sw.pack(side="left", padx=(S(0), S(8)))
+        sw.create_oval(2, 2, 16, 16, fill=col_hex, outline="#ffffff", width=1)
+        tk.Label(chip, text=f"{col_name} powder · {mode}", bg=BG_CARD,
+                 fg=TEXT_PRIMARY, font=("Segoe UI", FS(11), "bold")).pack(side="left")
+
+        tk.Label(right,
+                 text=self.kid_pick("How to do the mirror:", "How to mirror it:"),
+                 bg=BG_CARD, fg=ACCENT_CYAN,
+                 font=("Segoe UI", FS(11), "bold")).pack(anchor="w",
+                                                        pady=(S(0), S(6)))
+        for i, line in enumerate(self._learn_symmetry_instructions(mode), 1):
+            r = tk.Frame(right, bg=BG_CARD)
+            r.pack(fill="x", anchor="w", pady=(S(0), S(5)))
+            tk.Label(r, text=str(i), bg=ACCENT_CYAN, fg="#06281c",
+                     font=("Segoe UI", FS(9), "bold"), width=S(2)).pack(
+                side="left", anchor="n", padx=(S(0), S(8)))
+            tk.Label(r, text=line, bg=BG_CARD, fg=TEXT_PRIMARY,
+                     font=("Segoe UI", FS(10)), justify="left",
+                     wraplength=W-340).pack(side="left", anchor="w")
+
+        footer = tk.Frame(body, bg=BG_CARD)
+        footer.pack(fill="x", side="bottom", pady=(S(8), S(0)))
+        pick = tk.Label(footer, text="← Pick another design", bg=BG_CARD,
+                        fg=TEXT_DIM, font=("Segoe UI", FS(9), "bold"),
+                        cursor="hand2")
+        pick.pack(side="left")
+        pick.bind("<Button-1>", lambda e: self._open_learn_gallery())
+
+        btns = tk.Frame(body, bg=BG_CARD)
+        btns.pack(fill="x", side="bottom", pady=(S(10), S(0)))
+        last = self._learn_sym_idx >= len(self._learn_sym_pairs) - 1
+        self._color_button(
+            btns,
+            self.kid_pick("✓ Check my mirror!", "✓ Done — check my symmetry")
+            if last else
+            self.kid_pick("✓ Done — next one!", "✓ Done — next half"),
+            self._learn_done_symmetry_half, ACCENT_GREEN,
+            width=S(260), height=S(46), font_size=FS(13)).pack(side="left")
+
+    def _learn_symmetry_instructions(self, mode):
+        """Guidance aimed at *producing* a mirror line, not recognising one."""
+        if self.kid_mode:
+            steps = [
+                "Find the dotted blue line — that's your magic mirror. Lay a "
+                "thread on it so you can really see it.",
+                "Pick one easy spot on the robot's shape: a pointy tip or the "
+                "fattest bit.",
+                "Count how far that spot is from the mirror line, then count "
+                "the SAME distance on your side and put a dot there.",
+                "Do two or three more dots the same way. Dots first — lines "
+                "after!",
+                "Join your dots up, but bend your curve the OTHER way. Left "
+                "becomes right in a mirror!",
+            ]
+            if mode != "2-way":
+                steps.append(
+                    "Finished one? Spin round to the next mirror line and do "
+                    "it all again!")
+            return steps
+        steps = [
+            "Find the cyan mirror line on the floor first — line it up with a "
+            "tile edge or lay a thread down so you can see it.",
+            "Pick one clear landmark on the robot's half: a tip, a corner, the "
+            "widest point.",
+            "Measure that landmark's distance from the mirror line, then mark "
+            "the same distance on your side. That dot is where it belongs.",
+            "Mark two or three more landmarks the same way before you draw any "
+            "line — dots first, curves after.",
+            "Now join your dots, curving the opposite way to the robot's half: "
+            "a curve bending left mirrors to one bending right.",
+        ]
+        if mode != "2-way":
+            steps.append(
+                "Finish one reflection completely, then turn the same way "
+                "round the centre and repeat it for the next mirror line.")
+        return steps
+
+    def _learn_done_symmetry_half(self):
+        """Child finished this reflection — next challenge, or go get scored."""
+        pair = self._learn_sym_pair()
+        if pair is None:
+            self._open_learn_camera_step()
+            return
+        self.log_to_console(
+            f"Learn Mode: learner completed the mirrored half of part "
+            f"{pair['part'] + 1}.", "recv")
+        self._learn_sym_idx += 1
+        n, total = self._learn_sym_idx, len(self._learn_sym_pairs)
+        if self._learn_sym_idx >= len(self._learn_sym_pairs):
+            self._open_learn_camera_step()
+            self._kid_celebrate("Both sides match — you're a mirror master! 🦋")
+            return
+        self._open_learn_symmetry_robot_turn()
+        self._kid_celebrate(f"Mirror {n} of {total} done! ⭐")
+
+    # ── Learn Mode: Pulli Mode (the graduation level) ─────────────────────────
+    # A pulli kolam is drawn around a scaffold of dots — the pulli. An
+    # experienced hand doesn't want the lines demonstrated, only the dots put
+    # down, and that is exactly what the robot is reduced to at Level 5. There
+    # is no separate "you graduated" screen: reaching Level 5 *is* the
+    # graduation, because the child is now using the robot the same way
+    # grandma would.
+
+    def _learn_pulli_dots(self):
+        """The dot scaffold for the design currently being learned.
+
+        Dots are sampled evenly along each part of the chosen rangoli rather
+        than laid out as a generic lattice, so the child is connecting dots
+        that actually belong to their own design. Near-coincident dots (where
+        parts of the design overlap) are merged, and the whole set is capped so
+        a many-part design doesn't turn into a dot storm.
+        Returns canvas-space [(x, y), …].
+        """
+        parts = [p for p in self._learn_parts if len(p) >= 2]
+        if not parts:
+            return []
+
+        pts = [pt for p in parts for pt in p]
+        xs, ys = [x for x, _ in pts], [y for _, y in pts]
+        span = max(max(xs) - min(xs), max(ys) - min(ys), 1e-9)
+        min_gap = span * 0.06          # scale-free: 6% of the design's extent
+
+        per = max(2, min(PULLI_DOTS_PER_PART,
+                         max(2, PULLI_MAX_DOTS // len(parts))))
+        dots = []
+        for path in parts:
+            n = len(path)
+            for j in range(per):
+                x, y = path[round(j * (n - 1) / (per - 1))]
+                if all((x - dx) ** 2 + (y - dy) ** 2 >= min_gap ** 2
+                       for dx, dy in dots):
+                    dots.append((x, y))
+                if len(dots) >= PULLI_MAX_DOTS:
+                    return dots
+        return dots
+
+    def _learn_dot_gcode_lines(self, dots, f):
+        """G-code that dabs one dot of powder at each point.
+
+        Same nozzle convention as _paths_gcode_lines — travel with the nozzle
+        shut, open it on the spot, shut it again — so each pulli comes out as a
+        dab rather than the start of a stroke.
+        """
+        lines = []
+        for px, py in dots:
+            mx, my = self.to_machine(px, py)
+            lines += [
+                f"G1 Z{NOZZLE_CLOSED_Z:.2f} F{f}",
+                f"G1 X{round(mx, 4):.4f} F{f}",
+                f"G1 Y{round(my, 4):.4f} F{f}",
+                "M3",
+                f"G1 Z{NOZZLE_OPEN_Z:.2f} F{f}",
+                f"G1 Z{NOZZLE_CLOSED_Z:.2f} F{f}",
+                "M5",
+            ]
+        return lines
+
+    def _learn_start_pulli(self):
+        """Lay the whole dot scaffold — for real if a port is connected, and
+        always as an animated reveal in the preview."""
+        self._learn_dots_laid = False
+        self._learn_streaming = False
+        n = len(self._learn_dots)
+        if self.port_var.get() and not self.is_sending:
+            _SPEED_MAP = {"Aqua Low": 50, "Super Low": 100,
+                          "Low (default)": 150, "Medium": 200, "High": 250}
+            f = _SPEED_MAP.get(self.feed_rate.get(), 150)
+            lines = ["$X", "G21", "G90", f"F{f}"]
+            lines += self._learn_dot_gcode_lines(self._learn_dots, f)
+            lines += [f"G1 Z0.00 F{f}", "G1 X0", "G1 Y0"]
+            self._pending_raw_gcode = lines
+            self._on_send_complete = self._learn_pulli_done
+            self._learn_streaming = True
+            self.log_to_console(
+                f"Learn Mode: Pulli Mode — robot laying {n} dots.", "info")
+            self.start_gcode_streaming()
+        else:
+            why = ("robot is busy with another job"
+                   if self.port_var.get() else "no robot connected")
+            self.log_to_console(
+                f"Learn Mode: {why} — showing the {n} pulli on screen instead.",
+                "info")
+
+    def _open_learn_pulli_step(self):
+        """Pulli Mode's opening screen: the robot puts the dots down, once."""
+        W, H = S(540), S(500)
+        _, body = self._learn_shell(
+            W, H,
+            self.kid_pick("Dot magic! ✨", "Pulli Mode — the robot lays the dots"),
+            self.kid_pick(
+                "You're on the top level! The robot only puts the dots down "
+                "now — connect the dots without lifting your magic bottle, "
+                "just like grandma does!",
+                f"You've reached {self._learn_level_label()}. The robot places "
+                f"the pulli for '{self._learn_design}' and nothing else — every "
+                f"line of the rangoli is yours to draw, the way grandma does "
+                f"it."),
+            outline=KID_THEME["outline"] if self.kid_mode else ACCENT_AMBER,
+            mascot="watch")
+
+        prev = tk.Canvas(body, width=S(220), height=S(220), bg=CANVAS_BG,
+                         highlightthickness=0)
+        prev.pack(pady=(S(2), S(10)))
+        self._learn_prev = prev
+        self._learn_tf = self._learn_tf_for(self._learn_parts, 110, 110, 96)
+        self._learn_render_preview()
+
+        tk.Label(body,
+                 text=f"{len(self._learn_dots)} dots. The faint grey lines are "
+                      f"only a reference — join the dots in your own hand.",
+                 bg=BG_CARD, fg=TEXT_PRIMARY, font=("Segoe UI", FS(10)),
+                 justify="center", wraplength=W-70).pack(pady=(S(0), S(8)))
+
+        self._learn_status = tk.Label(
+            body, text="", bg=BG_CARD, fg=ACCENT_AMBER,
+            font=("Segoe UI", FS(10), "bold"), wraplength=W-70, justify="center")
+        self._learn_status.pack(side="bottom")
+        self._learn_update_status()
+
+        self._learn_start_pulli()
+        self._learn_animate_dots()
+
+    def _learn_animate_dots(self):
+        """Reveal the pulli one dot at a time while the robot lays them."""
+        if self._learn_anim_id is not None:
+            try: self.root.after_cancel(self._learn_anim_id)
+            except Exception: pass
+            self._learn_anim_id = None
+        if self._learn_prev is None or self._learn_tf is None:
+            return
+        self._learn_prev.delete("learn_dots")
+        self._learn_dot_step(0)
+
+    def _learn_dot_step(self, i):
+        prev = self._learn_prev
+        try:
+            alive = prev is not None and prev.winfo_exists()
+        except tk.TclError:
+            alive = False
+        if not alive:
+            self._learn_anim_id = None
+            return
+        if i < len(self._learn_dots):
+            x, y = self._learn_map(self._learn_tf, *self._learn_dots[i])
+            r = 3
+            prev.create_oval(x - r, y - r, x + r, y + r, fill=ACCENT_AMBER,
+                             outline="#ffffff", width=1, tags="learn_dots")
+            self._learn_anim_id = self.root.after(
+                70, lambda: self._learn_dot_step(i + 1))
+            return
+        self._learn_anim_id = None
+        # With no robot attached the on-screen reveal IS the robot laying dots.
+        if not self._learn_streaming:
+            self._learn_pulli_done()
+
+    def _learn_pulli_done(self, ok=True):
+        """Dots are down (or the stream failed) — hand the rangoli to the child."""
+        self._learn_streaming = False
+        if not ok:
+            self.log_to_console(
+                "Learn Mode: the dots did NOT finish — see the GRBL log. "
+                "Holding the lesson here.", "err")
+            self._open_learn_pulli_error()
+            return
+        self._learn_dots_laid = True
+        n = len(self._learn_dots)
+        self.log_to_console(
+            f"Learn Mode: {n} pulli laid — every line is "
+            f"the learner's from here.", "recv")
+        self._learn_advance(hint=self.kid_pick(
+            "Dots are down — go join them up! ✨",
+            "Dots are down — the rangoli is all yours!"))
+        self._kid_set_mood(
+            "cheer", f"{n} magic dots! Now connect them without lifting your "
+                     f"bottle! ✨")
+
+    def _open_learn_pulli_error(self):
+        """The dot pass didn't complete — retry it or place the dots by hand."""
+        W, H = S(520), S(330)
+        _, body = self._learn_shell(
+            W, H, "The dots didn't finish",
+            "GRBL reported a problem while the robot was laying the pulli. "
+            "Check the Log for the exact error, make sure the robot is "
+            "connected and unclogged, then retry.", outline=ACCENT_PINK)
+
+        def _retry():
+            self._open_learn_pulli_step()
+
+        def _by_hand():
+            self._learn_dots_laid = True
+            self.log_to_console(
+                "Learn Mode: learner is placing the pulli by hand.", "info")
+            self._learn_advance()
+
+        self._color_button(
+            body, "↻ Lay the dots again", _retry,
+            ACCENT_PURP, width=W-52, height=S(44), font_size=FS(12)).pack(
+                pady=(S(10), S(8)))
+        self._color_button(
+            body, "I'll place the dots myself", _by_hand,
             ACCENT_GREEN, width=W-52, height=S(44), font_size=FS(12)).pack()
 
     # ── Learn Mode: USB camera install ────────────────────────────────────────
@@ -5282,12 +7575,24 @@ class ShapeApp:
         rangoli. Reachable with or without a camera plugged in — the course
         can always be finished without one."""
         W, H = S(520), S(400)
+        sub = ("A USB camera mounted over the mat photographs your finished "
+               "rangoli. Plug it in and install it here — the choice is "
+               "remembered for next time.")
+        if self._learn_lesson == "symmetry":
+            sub = ("Photograph the whole exercise — the robot's half AND your "
+                   "mirrored half, with the mirror line running through the "
+                   "middle of the frame. The AI scores the symmetry between "
+                   "them, so both sides have to be in shot.")
+        if self.kid_mode:
+            sub = ("Time to show off your rangoli! Point the camera at it and "
+                   "take a photo — then I'll give you stars. ⭐" +
+                   ("  Get BOTH halves in the picture!"
+                    if self._learn_lesson == "symmetry" else ""))
         _, body = self._learn_shell(
-            W, H, "Set up the rangoli camera",
-            "A USB camera mounted over the mat photographs your finished "
-            "rangoli. Plug it in and install it here — the choice is "
-            "remembered for next time.",
-            outline=ACCENT_CYAN)
+            W, H,
+            self.kid_pick("Photo time! 📸", "Set up the rangoli camera"), sub,
+            outline=KID_THEME["outline"] if self.kid_mode else ACCENT_CYAN,
+            mascot="cheer")
 
         self._camera_status = tk.Label(
             body, text=self._camera_installed_text(),
@@ -5697,18 +8002,107 @@ class ShapeApp:
     def _learn_known_facts(self):
         """Facts the app already knows — no AI needed for these."""
         design     = self._learn_design or "Your Rangoli"
+        if self._learn_lesson == "symmetry":
+            # The "complexity" row carries the mirror mode for a symmetry
+            # challenge — that IS the difficulty of this lesson.
+            return {"name": f"{design} — symmetry", "out_of": 10,
+                    "complexity": f"{self._learn_sym_mode} "
+                                  f"({LEARN_SYMMETRY_LABELS[self._learn_sym_mode]})"}
         complexity = PRESET_DESIGNS.get(self._learn_design, {}).get(
             "difficulty", "Medium")
         return {"name": design, "complexity": complexity, "out_of": 10}
 
     def _learn_fallback_verdict(self):
         """Used when there's no photo / no API key / the AI call fails."""
+        if self._learn_lesson == "symmetry":
+            return {"score": 9, "improvements": [
+                "Check both halves sit the same distance from the mirror line.",
+                "Match the curve direction on the reflected side.",
+                "Keep the mirrored tips level with the robot's tips.",
+            ]}
         return {"score": 9, "improvements": [
             "Make the white outlines more uniform.",
             "Improve the smoothness of a few curved edges.",
             "Ensure slightly more consistent spacing in the inner "
             "decorative patterns.",
         ]}
+
+    def _score_learn_symmetry_ai(self, api_key, photo_path, design, mode):
+        """Score the photo on mirror symmetry alone.
+
+        Deliberately a different prompt from _score_learn_photo_ai: that one
+        judges the rangoli as a whole (neatness, spacing, how well it matches
+        the design), which is exactly the blend that lets a lopsided-but-tidy
+        attempt score well. This lesson exists to isolate symmetry, so the
+        judgement has to isolate it too — the model is told which mirror lines
+        to check and told to ignore overall prettiness.
+        """
+        import base64
+        with open(photo_path, "rb") as fh:
+            img_b64 = base64.b64encode(fh.read()).decode("ascii")
+        ext   = os.path.splitext(photo_path)[1].lower()
+        media = "image/png" if ext == ".png" else "image/jpeg"
+
+        axes = {"2-way": "a single vertical mirror line through the centre",
+                "4-way": "a vertical AND a horizontal mirror line through the "
+                         "centre",
+                "8-way": "vertical, horizontal and both diagonal mirror lines "
+                         "through the centre"}[mode]
+        prompt = (
+            f"This is a photo of a hand-drawn rangoli exercise based on "
+            f"'{design}'. Part of it was drawn by a machine and the rest was "
+            f"drawn BY HAND by a child trying to mirror it.\n\n"
+            f"Judge ONE THING ONLY: mirror symmetry about {axes}. For each "
+            f"mirror line, compare the two sides — are matching features the "
+            f"same distance from the line, at the same angle, the same size, "
+            f"with curves bending the opposite way as a true reflection "
+            f"should?\n\n"
+            f"IGNORE neatness, powder texture, colour, line thickness and "
+            f"overall beauty unless they actually break the symmetry. A "
+            f"beautiful but lopsided rangoli must score LOW. A rough but "
+            f"accurately mirrored one must score HIGH.\n\n"
+            f"Reply with ONLY compact JSON, no markdown, no commentary, in "
+            f"EXACTLY this shape (the values show the FORMAT, not the "
+            f"answer):\n"
+            f'{{"score": 6, "improvements": ["tip", "tip", "tip"]}}\n'
+            f"Rules: score is an integer 0-10 rating symmetry accuracy ONLY. "
+            f"Give EXACTLY 3 short, specific, encouraging tips, each under 12 "
+            f"words, each about making the reflection more accurate."
+        )
+        body = {
+            "model": "gpt-5.4",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:{media};base64,{img_b64}"}},
+                ],
+            }],
+            "max_completion_tokens": 300,
+            "temperature": 0.4,
+        }
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {api_key}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+
+        text = result["choices"][0]["message"]["content"].strip().strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+        data = json.loads(text)
+
+        score = max(0, min(10, int(round(float(data.get("score", 0))))))
+        tips  = [str(t).strip() for t in data.get("improvements", [])
+                 if str(t).strip()]
+        if not tips:
+            raise ValueError("AI reply had no improvement tips.")
+        return {"score": score, "improvements": tips[:3]}
 
     def _score_learn_photo_ai(self, api_key, photo_path, design, complexity):
         """Send the camera photo to the vision model; return {score, improvements}.
@@ -5775,11 +8169,23 @@ class ShapeApp:
     def _learn_eval_worker(self, api_key, photo_path, popup):
         """Background thread: score the photo, then render on the UI thread."""
         facts = self._learn_known_facts()
+        # "ai" only when the model really judged the photo — the level is
+        # derived from these rows, so a fallback must never be labelled as one.
+        scored_by = "sample"
+        symmetry  = self._learn_lesson == "symmetry"
         try:
-            ai = self._score_learn_photo_ai(
-                api_key, photo_path, facts["name"], facts["complexity"])
+            if symmetry:
+                ai = self._score_learn_symmetry_ai(
+                    api_key, photo_path, self._learn_design or "a rangoli",
+                    self._learn_sym_mode)
+            else:
+                ai = self._score_learn_photo_ai(
+                    api_key, photo_path, facts["name"], facts["complexity"])
             verdict, note = {**facts, **ai}, None
-            self.log_to_console(f"Learn Mode: AI scored {ai['score']}/10.", "recv")
+            scored_by = "ai"
+            self.log_to_console(
+                f"Learn Mode: AI scored "
+                f"{'symmetry ' if symmetry else ''}{ai['score']}/10.", "recv")
         except urllib.error.HTTPError as e:
             detail = ""
             try: detail = e.read().decode("utf-8", errors="ignore")[:150]
@@ -5792,7 +8198,8 @@ class ShapeApp:
             self.log_to_console(f"Learn Mode: AI scoring failed ({e}).", "err")
             verdict = {**facts, **self._learn_fallback_verdict()}
             note = "Couldn't score the photo — showing sample values."
-        self.root.after(0, lambda: self._render_learn_result(popup, verdict, note))
+        self.root.after(0, lambda: self._render_learn_result(
+            popup, verdict, note, scored_by))
 
     def _show_learn_evaluation(self):
         """Neon 'RANGOLI RESULT' card. Shows an 'Evaluating…' state, sends the
@@ -5810,13 +8217,14 @@ class ShapeApp:
         comp_y  = y; y += ROW_H + GAP
         score_y = y; y += ROW_H + GAP
         impr_y  = y
-        note_y  = impr_y + IMPR_H + S(8)
-        btn_y   = impr_y + IMPR_H + S(26)
+        level_y = impr_y + IMPR_H + S(14)   # "moved up to Level 3" line
+        note_y  = level_y + S(18)           # fallback-reason line, if any
+        btn_y   = note_y + S(16)
         H = btn_y + BTN_H * 2 + S(12) + S(18)
         self._eval_layout = dict(
             W=W, H=H, pad=pad, ib=ib, tl=tl, ROW_H=ROW_H, IMPR_H=IMPR_H,
             BTN_H=BTN_H, name_y=name_y, comp_y=comp_y, score_y=score_y,
-            impr_y=impr_y, note_y=note_y, btn_y=btn_y)
+            impr_y=impr_y, level_y=level_y, note_y=note_y, btn_y=btn_y)
 
         CARD_BG = "#0b0b12"
         NEON = ["#f472b6", "#a78bfa", "#22d3ee", "#10b981", "#f97316", "#f472b6"]
@@ -5910,7 +8318,8 @@ class ShapeApp:
             cv.create_oval(px - 2, py - 2, px + 2, py + 2,
                            fill=NEON[rng.randrange(len(NEON))], outline="")
         tfont = _tkfont.Font(family="Segoe UI", size=FS(26), weight="bold")
-        title = "RANGOLI RESULT"
+        title = ("SYMMETRY RESULT" if self._learn_lesson == "symmetry"
+                 else "RANGOLI RESULT")
         tx = hx - tfont.measure(title) // 2
         for i, ch in enumerate(title):
             col = _lerp("#f472b6", "#f97316", i / max(1, len(title) - 1))
@@ -5950,15 +8359,21 @@ class ShapeApp:
             self._render_learn_result(
                 popup, {**self._learn_known_facts(),
                         **self._learn_fallback_verdict()},
-                note=f"{why} — showing sample values.")
+                note=f"{why} — showing sample values.", scored_by="sample")
 
         self._fade(popup, 0.0, 0.98, 0.08)
         popup.lift()
         popup.focus_force()
 
-    def _render_learn_result(self, popup, verdict, note=None):
+    def _render_learn_result(self, popup, verdict, note=None, scored_by="sample"):
         """Paint the real result rows + buttons onto the card. Safe to call from
-        a background-thread callback: it no-ops if the popup has been closed."""
+        a background-thread callback: it no-ops if the popup has been closed.
+
+        The attempt is written to the learner profile *before* the popup check,
+        so a child who closes the card while the AI is still thinking doesn't
+        silently lose the score that earned them their next level.
+        """
+        self._record_learn_session(verdict, scored_by)
         if self._learn_popup is not popup:
             return
         import math
@@ -5969,6 +8384,7 @@ class ShapeApp:
         ROW_H, IMPR_H, BTN_H = L["ROW_H"], L["IMPR_H"], L["BTN_H"]
         name_y, comp_y, score_y = L["name_y"], L["comp_y"], L["score_y"]
         impr_y, note_y, btn_y   = L["impr_y"], L["note_y"], L["btn_y"]
+        level_y = L["level_y"]
         _blend = self._eval_blend
 
         cv.delete("eval")                    # clear the loading text
@@ -6037,12 +8453,26 @@ class ShapeApp:
         _icon(pad + 14, score_y + (ROW_H - ib)//2, ACCENT_GREEN, "star")
         cv.create_text(tl, score_y + 22, text="Total Score", anchor="w",
                        fill=TEXT_DIM, font=("Segoe UI", FS(11)), tags="eval")
-        sfont = _tkfont.Font(family="Segoe UI", size=FS(24), weight="bold")
-        cv.create_text(tl, score_y + 50, text=str(verdict["score"]), anchor="w",
-                       fill=ACCENT_GREEN, font=sfont, tags="eval")
-        cv.create_text(tl + sfont.measure(str(verdict["score"])) + 6, score_y + 52,
-                       text=f"/ {verdict['out_of']}", anchor="w",
-                       fill=TEXT_PRIMARY, font=("Segoe UI", FS(14), "bold"), tags="eval")
+        if self.kid_mode:
+            # Kid Mode shows stars rather than a bare mark — but the real score
+            # stays on the card in small text, because a judge or a parent still
+            # needs to be able to read what the model actually said.
+            stars = self._kid_star_text(verdict["score"], verdict["out_of"])
+            sfont = _tkfont.Font(family="Segoe UI", size=FS(21), weight="bold")
+            cv.create_text(tl, score_y + 50, text=stars, anchor="w",
+                           fill="#fbbf24", font=sfont, tags="eval")
+            cv.create_text(tl + sfont.measure(stars) + 10, score_y + 52,
+                           text=f"({verdict['score']}/{verdict['out_of']})",
+                           anchor="w", fill=TEXT_DIM,
+                           font=("Segoe UI", FS(10)), tags="eval")
+        else:
+            sfont = _tkfont.Font(family="Segoe UI", size=FS(24), weight="bold")
+            cv.create_text(tl, score_y + 50, text=str(verdict["score"]), anchor="w",
+                           fill=ACCENT_GREEN, font=sfont, tags="eval")
+            cv.create_text(tl + sfont.measure(str(verdict["score"])) + 6, score_y + 52,
+                           text=f"/ {verdict['out_of']}", anchor="w",
+                           fill=TEXT_PRIMARY, font=("Segoe UI", FS(14), "bold"),
+                           tags="eval")
         # Improvements
         _field(impr_y, IMPR_H, ACCENT_AMBER, glow=True)
         _icon(pad + 14, impr_y + 16, ACCENT_AMBER, "bulb")
@@ -6057,6 +8487,14 @@ class ShapeApp:
                                   width=W - tl - pad - 20, tags="eval")
             bb = cv.bbox(item)
             ty = (bb[3] if bb else ty + 20) + 8
+
+        # where this attempt left the learner's level
+        if self._learn_level_note:
+            moved = self._learn_level_note.startswith("\U0001f389")
+            cv.create_text(W // 2, level_y, text=self._learn_level_note,
+                           fill=ACCENT_GREEN if moved else TEXT_PRIMARY,
+                           font=("Segoe UI", FS(10), "bold"),
+                           width=W - 2*pad, tags="eval")
 
         # optional note (fallback reason)
         if note:
@@ -6074,13 +8512,22 @@ class ShapeApp:
                                 font_size=FS(13), corner_radius=S(14))
         b2.place(x=pad, y=btn_y + BTN_H + 12)
 
-        # Persist the attempt exactly once per result card. ``note`` is set
-        # only when the fallback verdict was used, so it doubles as the flag
-        # that says this score wasn't earned against a real photo.
-        if self._learn_recorded_for is not popup:
-            self._learn_recorded_for = popup
-            self._record_learn_session(verdict, "sample" if note else "ai")
-
+        if self.kid_mode:
+            # The mascot reacts to the mark: cheer on a good one, encourage on a
+            # wobbly one. Sample verdicts never trigger a cheer — praising a
+            # hardcoded 9/10 would be praising nothing the child did.
+            stars = self._kid_stars_for(verdict["score"], verdict["out_of"])
+            if scored_by != "ai":
+                self._kid_set_mood(
+                    "idle", "Take a photo next time and I'll give you stars! 📸")
+            elif stars >= 4:
+                self._kid_celebrate(f"{stars} stars! That's brilliant! 🎉")
+            elif stars >= 3:
+                self._kid_set_mood("cheer", f"{stars} stars — really good! ⭐")
+            else:
+                self._kid_set_mood(
+                    "oops", f"{stars} star{'' if stars == 1 else 's'} this time"
+                            f" — every rangoli makes your hand steadier!")
     def _show_learn_complete(self):
         W, H = S(460), S(300)
         _, body = self._learn_shell(
@@ -6110,6 +8557,19 @@ class ShapeApp:
         self._learn_prev = None
         self._learn_tf = None
         self._learn_status = None
+        # The one-line visualisation runs its own frame loop on its own canvas,
+        # so it needs cancelling here too or it keeps ticking into dead widgets.
+        self._sikku_stop()
+        # Same for the Kid Mode loops — mascot, confetti and sparkles all draw
+        # into widgets that are about to be destroyed.
+        self._kid_stop_mascot()
+        self._kid_stop_confetti()
+        self._kid_clear_sparkles()
+        self._kid_glass = None
+        self._sikku_prev = None
+        self._sikku_tf = None
+        self._sikku_counter = None
+        self._sikku_play_btn = None
         # Camera widgets live in this popup too; a scan thread that finishes
         # afterwards must not touch them.
         self._camera_status = None
@@ -6124,490 +8584,6 @@ class ShapeApp:
         try: popup.destroy()
         except Exception: pass
         self._learn_popup = None
-
-    # ── Progress & Impact: the scored-attempt store ──────────────────────────
-    # Learn Mode already produces a real judgement of each hand-drawn rangoli;
-    # until now it was shown once and thrown away. Persisting it is what lets
-    # the app answer "is this actually teaching anyone?" with data.
-    def _load_learn_progress(self):
-        """Read the history file into memory.
-
-        Runs from __init__, before the console exists, so problems stay silent
-        — a missing or corrupt file simply means "no history yet", which must
-        never stop Learn Mode from running.
-        """
-        try:
-            with open(LEARN_PROGRESS_FILE, "r", encoding="utf-8") as fh:
-                loaded = json.load(fh)
-            if isinstance(loaded, dict) and isinstance(loaded.get("sessions"), list):
-                self._progress["sessions"] = [
-                    s for s in loaded["sessions"] if isinstance(s, dict)]
-                self._progress["last_learner"] = str(
-                    loaded.get("last_learner") or "")
-        except Exception:
-            pass
-        self._learn_learner = self._progress.get("last_learner") or ""
-
-    def _save_learn_progress(self):
-        self._progress["last_learner"] = self._learn_learner
-        try:
-            with open(LEARN_PROGRESS_FILE, "w", encoding="utf-8") as fh:
-                json.dump(self._progress, fh, indent=2)
-            return True
-        except OSError as e:
-            self.log_to_console(f"Progress: couldn't save history — {e}", "err")
-            return False
-
-    def _record_learn_session(self, verdict, scored_by):
-        """Append one finished Learn Mode attempt to the history file.
-
-        ``scored_by`` is "ai" when a real photo was judged and "sample" when
-        the hardcoded fallback verdict was shown instead. Sample rows are kept
-        so the practice still shows up, but they are excluded from every
-        statistic — a fallback is always 9/10 and would otherwise invent an
-        improvement curve nobody earned.
-        """
-        photo = self._learn_photo_path
-        if photo:
-            try:
-                photo = os.path.relpath(photo, _APP_DIR)
-            except ValueError:      # different drive on Windows
-                pass
-        entry = {
-            "learner":    self._learn_learner or "Guest",
-            "design":     verdict.get("name", "Rangoli"),
-            "complexity": verdict.get("complexity", ""),
-            "score":      verdict.get("score", 0),
-            "out_of":     verdict.get("out_of", 10),
-            "scored_by":  scored_by,
-            "timestamp":  time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "photo":      photo or "",
-            "improvements": list(verdict.get("improvements", []))[:3],
-        }
-        self._progress["sessions"].append(entry)
-        if self._save_learn_progress():
-            self.log_to_console(
-                f"Progress: saved {entry['learner']}'s attempt at "
-                f"'{entry['design']}' ({entry['score']}/{entry['out_of']}, "
-                f"{scored_by}).", "info")
-
-    def _progress_learners(self):
-        """Every learner name in the history, most recently active first."""
-        seen = []
-        for s in reversed(self._progress["sessions"]):
-            name = s.get("learner") or "Guest"
-            if name not in seen:
-                seen.append(name)
-        return seen
-
-    def _progress_sessions_for(self, learner):
-        """Return (scored_rows, sample_count) for one learner, or all of them
-        when ``learner`` is None. Rows come back oldest-first."""
-        rows = [s for s in self._progress["sessions"]
-                if learner is None or (s.get("learner") or "Guest") == learner]
-        scored = [s for s in rows if s.get("scored_by") == "ai"]
-        return scored, len(rows) - len(scored)
-
-    @staticmethod
-    def _progress_stats(scored):
-        """Headline numbers for the stat tiles. Empty history yields dashes so
-        the dashboard never shows a misleading zero."""
-        if not scored:
-            return {"count": 0, "avg": "—", "best": "—", "delta": "—",
-                    "mastered": 0}
-        vals = [s.get("score", 0) for s in scored]
-        best_per_design = {}
-        for s in scored:
-            d = s.get("design", "")
-            best_per_design[d] = max(best_per_design.get(d, 0), s.get("score", 0))
-        delta = "—"
-        if len(vals) >= 2:
-            diff  = vals[-1] - vals[0]
-            delta = f"+{diff}" if diff > 0 else str(diff)
-        return {
-            "count":    len(vals),
-            "avg":      f"{sum(vals) / len(vals):.1f}",
-            "best":     str(max(vals)),
-            "delta":    delta,
-            "mastered": sum(1 for v in best_per_design.values() if v >= MASTERY_SCORE),
-        }
-
-    # ── Progress & Impact: the dashboard ─────────────────────────────────────
-    def _close_progress_popup(self):
-        popup = self._progress_popup
-        self._progress_popup = None
-        self._progress_imgs  = []
-        if popup is None:
-            return
-        try: popup.unbind_all("<MouseWheel>")
-        except Exception: pass
-        try: popup.destroy()
-        except Exception: pass
-
-    def _open_progress_dashboard(self):
-        """Features popup > Progress & Impact.
-
-        Deliberately independent of ``_learn_popup``: opening it must not tear
-        down a lesson in progress, and it has to be viewable without entering
-        Learn Mode at all (that is how it gets shown to a judge).
-        """
-        self._close_features_popup()
-        self._close_progress_popup()
-        self.root.update_idletasks()
-
-        # Height leaves ~30px of slack below the content: font metrics differ
-        # between machines and the footer must never be pushed off the card.
-        W, H = S(880), S(730)
-        sx = self.root.winfo_screenwidth()  // 2 - W // 2
-        sy = max(S(20), self.root.winfo_screenheight() // 2 - H // 2)
-
-        popup = tk.Toplevel(self.root)
-        popup.overrideredirect(True)
-        popup.attributes("-topmost", True)
-        try: popup.attributes("-alpha", 0.0)
-        except tk.TclError: pass
-        popup.geometry(f"{W}x{H}+{sx}+{sy}")
-        popup.configure(bg=BG_DARK)
-        popup.transient(self.root)
-        self._progress_popup = popup
-
-        glass = tk.Canvas(popup, width=W, height=H, bg=BG_DARK,
-                          highlightthickness=0)
-        glass.pack(fill="both", expand=True)
-        self._draw_rounded_rect(glass, 4, 4, W - 4, H - 4, radius=S(22),
-                                fill=BG_CARD, outline=ACCENT_CYAN, width=2)
-        glass.create_text(28, 30, text="Progress & Impact", anchor="w",
-                          fill=TEXT_PRIMARY, font=("Segoe UI", FS(16), "bold"))
-        glass.create_text(28, 56,
-                          text="Every scored Learn Mode attempt, so you can see "
-                               "hands actually getting steadier over time.",
-                          anchor="w", fill=TEXT_DIM, font=("Segoe UI", FS(9)),
-                          width=W - 90)
-
-        close_lbl = tk.Label(popup, text="✕", bg=BG_CARD, fg=TEXT_DIM,
-                             font=("Segoe UI", FS(14), "bold"), cursor="hand2")
-        close_lbl.place(x=W - 42, y=20)
-        close_lbl.bind("<Button-1>", lambda e: self._close_progress_popup())
-
-        body = tk.Frame(popup, bg=BG_CARD)
-        body.place(x=26, y=84, width=W - 52, height=H - 84 - 22)
-        self._progress_body = body
-        self._progress_filter = self._learn_learner or None
-        self._render_progress_body()
-
-        self._fade(popup, 0.0, 0.98, 0.08)
-        popup.lift()
-        popup.focus_force()
-
-    def _render_progress_body(self):
-        """Paint (or repaint, after a learner-filter change) the dashboard."""
-        body = self._progress_body
-        try:
-            if not body.winfo_exists():
-                return
-        except tk.TclError:
-            return
-        for w in body.winfo_children():
-            w.destroy()
-        self._progress_imgs = []
-
-        BW = body.winfo_width() or (S(880) - 52)
-        learners = self._progress_learners()
-        if self._progress_filter not in learners:
-            self._progress_filter = None
-        scored, samples = self._progress_sessions_for(self._progress_filter)
-        stats = self._progress_stats(scored)
-
-        # ── learner filter chips ─────────────────────────────────────────
-        chips = tk.Frame(body, bg=BG_CARD)
-        chips.pack(fill="x", pady=(0, S(10)))
-        tk.Label(chips, text="Showing:", bg=BG_CARD, fg=TEXT_DIM,
-                 font=("Segoe UI", FS(10))).pack(side="left", padx=(0, S(8)))
-
-        def _chip(text, value):
-            active = (self._progress_filter == value)
-            b = self._color_button(
-                chips, text, lambda v=value: self._set_progress_filter(v),
-                ACCENT_CYAN if active else BG_INPUT,
-                width=S(104), height=S(30), font_size=FS(10),
-                text_color="#0a0a0f" if active else TEXT_PRIMARY,
-                corner_radius=S(15))
-            b.pack(side="left", padx=(0, S(6)))
-
-        _chip("Everyone", None)
-        for name in learners[:5]:
-            _chip(name, name)
-
-        # ── stat tiles ───────────────────────────────────────────────────
-        tiles = tk.Frame(body, bg=BG_CARD)
-        tiles.pack(fill="x", pady=(0, S(12)))
-        tile_specs = [
-            ("Scored attempts", str(stats["count"]),          ACCENT_BLUE),
-            ("Average score",   stats["avg"],                 ACCENT_CYAN),
-            ("Best score",      stats["best"],                ACCENT_GREEN),
-            ("First → latest",  stats["delta"],               ACCENT_PINK),
-            ("Designs mastered", str(stats["mastered"]),      ACCENT_PURP),
-        ]
-        for i, (label, value, colour) in enumerate(tile_specs):
-            tiles.grid_columnconfigure(i, weight=1, uniform="tile")
-            card = tk.Frame(tiles, bg=BG_INPUT, highlightthickness=1,
-                            highlightbackground=colour)
-            card.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else S(6), 0))
-            tk.Label(card, text=value, bg=BG_INPUT, fg=colour,
-                     font=("Segoe UI", FS(22), "bold")).pack(pady=(S(10), 0))
-            tk.Label(card, text=label, bg=BG_INPUT, fg=TEXT_DIM,
-                     font=("Segoe UI", FS(9))).pack(pady=(0, S(10)))
-
-        # ── score-over-time chart ────────────────────────────────────────
-        chart_h = S(210)
-        chart = tk.Canvas(body, height=chart_h, bg=BG_INPUT,
-                          highlightthickness=0)
-        chart.pack(fill="x", pady=(0, S(12)))
-        chart.bind("<Configure>",
-                   lambda e, c=chart, s=scored: self._draw_progress_chart(
-                       c, e.width, e.height, s))
-
-        # ── before / after photo pair ────────────────────────────────────
-        self._build_progress_photos(body, scored, BW)
-
-        # ── footer: sample-run note + export ─────────────────────────────
-        foot = tk.Frame(body, bg=BG_CARD)
-        foot.pack(fill="x", side="bottom")
-        note = ""
-        if samples:
-            note = (f"{samples} practice run{'s' if samples != 1 else ''} not "
-                    f"counted — no AI score was available.")
-        tk.Label(foot, text=note, bg=BG_CARD, fg=TEXT_DIM,
-                 font=("Segoe UI", FS(9)), justify="left").pack(side="left")
-        self._color_button(foot, "Export CSV", self._export_progress_csv,
-                           ACCENT_GREEN, width=S(120), height=S(34),
-                           font_size=FS(11)).pack(side="right")
-
-    def _set_progress_filter(self, learner):
-        self._progress_filter = learner
-        self._render_progress_body()
-
-    def _draw_progress_chart(self, cv, w, h, scored):
-        """Score-over-time line, drawn straight onto a Tk canvas so the chart
-        needs no plotting library and renders identically offline."""
-        try:
-            cv.delete("all")
-        except tk.TclError:
-            return
-        pad_l, pad_r, pad_t, pad_b = S(38), S(16), S(24), S(28)
-        x0, y0 = pad_l, pad_t
-        x1, y1 = max(pad_l + 1, w - pad_r), max(pad_t + 1, h - pad_b)
-
-        cv.create_text(pad_l, S(12), text="Score out of 10, oldest attempt first",
-                       anchor="w", fill=TEXT_DIM, font=("Segoe UI", FS(9)))
-
-        if not scored:
-            cv.create_text((x0 + x1) // 2, (y0 + y1) // 2,
-                           text="No scored attempts yet — finish a Learn Mode "
-                                "lesson with a photo to start the curve.",
-                           fill=TEXT_DIM, font=("Segoe UI", FS(10)))
-            return
-
-        out_of = max(1, scored[0].get("out_of", 10))
-        for v in range(0, out_of + 1, max(1, out_of // 5)):
-            gy = y1 - (y1 - y0) * (v / out_of)
-            cv.create_line(x0, gy, x1, gy, fill="#33334d")
-            cv.create_text(x0 - S(8), gy, text=str(v), anchor="e",
-                           fill=TEXT_DIM, font=("Segoe UI", FS(8)))
-
-        n = len(scored)
-        span = (x1 - x0) if n == 1 else (x1 - x0) / (n - 1)
-        pts = []
-        for i, s in enumerate(scored):
-            px = x0 + (span / 2 if n == 1 else span * i)
-            py = y1 - (y1 - y0) * (max(0, min(out_of, s.get("score", 0))) / out_of)
-            pts.append((px, py))
-
-        if n >= 2:
-            flat = [c for p in pts for c in p]
-            cv.create_line(*flat, fill=ACCENT_CYAN, width=S(3),
-                           smooth=True, capstyle="round", joinstyle="round")
-            # trend line: first attempt to latest, so the direction is unmissable
-            cv.create_line(pts[0][0], pts[0][1], pts[-1][0], pts[-1][1],
-                           fill=ACCENT_PINK, width=S(2), dash=(6, 4))
-
-        r = S(5)
-        for i, (px, py) in enumerate(pts):
-            colour = (ACCENT_GREEN if scored[i].get("score", 0) >= MASTERY_SCORE
-                      else ACCENT_CYAN)
-            cv.create_oval(px - r, py - r, px + r, py + r,
-                           fill=colour, outline=BG_INPUT, width=S(2))
-
-        # x-axis: only the ends are labelled, otherwise long histories collide
-        first_d = (scored[0].get("timestamp", "")[:10] or "first")
-        last_d  = (scored[-1].get("timestamp", "")[:10] or "latest")
-        cv.create_text(pts[0][0], y1 + S(14), text=first_d, anchor="n",
-                       fill=TEXT_DIM, font=("Segoe UI", FS(8)))
-        if n >= 2:
-            cv.create_text(pts[-1][0], y1 + S(14), text=last_d, anchor="n",
-                           fill=TEXT_DIM, font=("Segoe UI", FS(8)))
-
-    def _build_progress_photos(self, parent, scored, avail_w):
-        """First-ever vs most-recent photo, side by side — the single most
-        persuasive thing this dashboard shows."""
-        row = tk.Frame(parent, bg=BG_CARD)
-        row.pack(fill="x", pady=(0, S(10)))
-
-        withpic = [s for s in scored if s.get("photo")]
-        pairs = []
-        if withpic:
-            pairs.append(("First attempt", withpic[0]))
-            if len(withpic) >= 2:
-                pairs.append(("Latest attempt", withpic[-1]))
-        if not pairs:
-            tk.Label(row, text="Photos of your scored attempts will appear here.",
-                     bg=BG_CARD, fg=TEXT_DIM,
-                     font=("Segoe UI", FS(9))).pack(anchor="w")
-            return
-
-        thumb = S(150)
-        for i, (caption, sess) in enumerate(pairs):
-            card = tk.Frame(row, bg=BG_INPUT)
-            card.pack(side="left", padx=(0 if i == 0 else S(10), 0))
-            img = self._progress_thumbnail(sess.get("photo", ""), thumb)
-            if img is not None:
-                self._progress_imgs.append(img)
-                tk.Label(card, image=img, bg=BG_INPUT).pack(padx=S(6),
-                                                            pady=(S(6), S(2)))
-            else:
-                tk.Label(card, text="photo missing", width=S(18), height=S(7),
-                         bg=CANVAS_BG, fg=TEXT_DIM,
-                         font=("Segoe UI", FS(9))).pack(padx=S(6),
-                                                        pady=(S(6), S(2)))
-            tk.Label(card, text=caption, bg=BG_INPUT, fg=TEXT_PRIMARY,
-                     font=("Segoe UI", FS(10), "bold")).pack()
-            tk.Label(card,
-                     text=f"{sess.get('design', '')} · "
-                          f"{sess.get('score', 0)}/{sess.get('out_of', 10)}",
-                     bg=BG_INPUT, fg=TEXT_DIM,
-                     font=("Segoe UI", FS(9))).pack(pady=(0, S(8)))
-
-        if len(pairs) == 2:
-            gain = pairs[1][1].get("score", 0) - pairs[0][1].get("score", 0)
-            verdict = ("improved by" if gain > 0 else
-                       "changed by" if gain < 0 else "held steady at")
-            text = (f"{verdict} {abs(gain)} point{'s' if abs(gain) != 1 else ''}"
-                    if gain else "held steady")
-            side = tk.Frame(row, bg=BG_CARD)
-            side.pack(side="left", padx=(S(16), 0), anchor="n")
-            tk.Label(side, text="Between these two attempts the score",
-                     bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", FS(10)),
-                     wraplength=S(220), justify="left").pack(anchor="w",
-                                                             pady=(S(20), 0))
-            tk.Label(side, text=text, bg=BG_CARD,
-                     fg=ACCENT_GREEN if gain > 0 else TEXT_PRIMARY,
-                     font=("Segoe UI", FS(14), "bold"),
-                     wraplength=S(220), justify="left").pack(anchor="w")
-
-    def _progress_thumbnail(self, rel_path, size):
-        """Load a stored attempt photo as a square-ish thumbnail, or None."""
-        if not rel_path:
-            return None
-        path = rel_path if os.path.isabs(rel_path) else os.path.join(_APP_DIR,
-                                                                     rel_path)
-        if not os.path.exists(path):
-            return None
-        try:
-            from PIL import Image, ImageTk
-            img = Image.open(path)
-            img.thumbnail((size, size))
-            return ImageTk.PhotoImage(img)
-        except Exception:
-            return None
-
-    def _export_progress_csv(self):
-        """Write the history out flat — this is what goes in the engineering
-        journal and the presentation, so it includes the unscored runs too and
-        marks them as such."""
-        import csv
-        rows = self._progress["sessions"]
-        if not rows:
-            self.show_hint_popup("No practice history to export yet")
-            return
-        path = filedialog.asksaveasfilename(
-            title="Export progress history",
-            defaultextension=".csv",
-            initialfile="rangoli_progress.csv",
-            filetypes=[("CSV file", "*.csv"), ("All files", "*.*")])
-        if not path:
-            return
-        cols = ["timestamp", "learner", "design", "complexity", "score",
-                "out_of", "scored_by", "photo"]
-        try:
-            with open(path, "w", newline="", encoding="utf-8") as fh:
-                w = csv.writer(fh)
-                w.writerow(cols + ["improvements"])
-                for s in rows:
-                    w.writerow([s.get(c, "") for c in cols]
-                               + [" | ".join(s.get("improvements", []))])
-        except OSError as e:
-            self.show_hint_popup(f"Export failed — {e}")
-            self.log_to_console(f"Progress: export failed — {e}", "err")
-            return
-        self.show_hint_popup(f"Exported {len(rows)} attempts")
-        self.log_to_console(f"Progress: exported {len(rows)} attempts to {path}",
-                            "recv")
-
-    def _prompt_learner_name(self, on_done=None):
-        """Ask who is practising. Kept tiny and non-blocking — Learn Mode still
-        works untouched if the user just closes it (attempts land on 'Guest')."""
-        W, H = S(420), S(210)
-        self.root.update_idletasks()
-        sx = self.root.winfo_screenwidth()  // 2 - W // 2
-        sy = self.root.winfo_screenheight() // 2 - H // 2
-
-        win = tk.Toplevel(self.root)
-        win.overrideredirect(True)
-        win.attributes("-topmost", True)
-        win.geometry(f"{W}x{H}+{sx}+{sy}")
-        win.configure(bg=BG_DARK)
-        win.transient(self.root)
-
-        glass = tk.Canvas(win, width=W, height=H, bg=BG_DARK,
-                          highlightthickness=0)
-        glass.place(x=0, y=0, width=W, height=H)
-        self._draw_rounded_rect(glass, 4, 4, W - 4, H - 4, radius=S(18),
-                                fill=BG_CARD, outline=ACCENT_BLUE, width=2)
-        glass.create_text(24, 30, text="Who's practising?", anchor="w",
-                          fill=TEXT_PRIMARY, font=("Segoe UI", FS(14), "bold"))
-        glass.create_text(24, 56,
-                          text="Scores are saved under this name so progress "
-                               "can be tracked per person.",
-                          anchor="w", fill=TEXT_DIM, font=("Segoe UI", FS(9)),
-                          width=W - 48)
-
-        entry = ctk.CTkEntry(win, width=W - S(60), height=S(38),
-                             placeholder_text="Your name",
-                             fg_color=BG_INPUT, border_color=GLASS_EDGE,
-                             text_color=TEXT_PRIMARY,
-                             font=("Segoe UI", FS(11)))
-        entry.place(x=S(30), y=S(92))
-        if self._learn_learner:
-            entry.insert(0, self._learn_learner)
-
-        def _finish():
-            name = entry.get().strip()[:40]
-            if name:
-                self._learn_learner = name
-                self._save_learn_progress()
-                self.log_to_console(f"Progress: practising as {name}.", "info")
-            try: win.destroy()
-            except Exception: pass
-            if on_done:
-                on_done()
-
-        entry.bind("<Return>", lambda e: _finish())
-        self._color_button(win, "Save", _finish, ACCENT_GREEN,
-                           width=W - S(60), height=S(40),
-                           font_size=FS(12)).place(x=S(30), y=S(146))
-        win.lift()
-        win.focus_force()
-        entry.focus_set()
 
     # ── Canvas interactions ───────────────────────────────────────────────────
     def on_canvas_click(self, event):
@@ -7245,7 +9221,8 @@ class ShapeApp:
         return "#f43f5e" if self.pen_mode_var.get() else "#0d9488"
 
     def _pen_btn_label(self):
-        return "✏ Pen off" if self.pen_mode_var.get() else "✏ Pen"
+        return (f"✏ {self.tr('Pen off')}" if self.pen_mode_var.get()
+                else f"✏ {self.tr('Pen')}")
 
     def _refresh_pen_btn(self):
         """Repaint the pen button — it is rebuilt with the Design Options
@@ -7295,13 +9272,19 @@ class ShapeApp:
         mirrored = "" if len(paths) == 1 else f" (+{len(paths)-1} mirrored)"
         self.log_to_console(f"Pen stroke added{mirrored}.", "info")
 
-    def _mirror_transforms(self):
-        """Reflection functions for the active mirror mode, about the canvas
-        centre: 2-way = vertical axis; 4-way adds horizontal; 8-way adds
-        both diagonals."""
-        mode = self.mirror_mode_var.get()
-        cx = MARGIN_L + GRAPH_W / 2.0
-        cy = MARGIN_T + GRAPH_H / 2.0
+    def _mirror_transforms(self, mode=None, cx=None, cy=None):
+        """Reflection functions for a mirror mode, about a centre point:
+        2-way = vertical axis; 4-way adds horizontal; 8-way adds both
+        diagonals.
+
+        Defaults to the stroke editor's own mirror setting about the canvas
+        centre, which is what the pen tool wants. Learn Mode's symmetry
+        challenges pass an explicit mode and the design's centre so the same
+        reflection engine drives the lesson — see _learn_symmetry_pairs.
+        """
+        mode = self.mirror_mode_var.get() if mode is None else mode
+        cx = MARGIN_L + GRAPH_W / 2.0 if cx is None else cx
+        cy = MARGIN_T + GRAPH_H / 2.0 if cy is None else cy
         t = []
         if mode in ("2-way", "4-way", "8-way"):
             t.append(lambda x, y: (2 * cx - x, y))
@@ -7315,8 +9298,41 @@ class ShapeApp:
             t.append(lambda x, y: (cx - (y - cy), cy - (x - cx)))
         return t
 
-    def _mirror_paths(self, pts):
-        return [[f(x, y) for x, y in pts] for f in self._mirror_transforms()]
+    def _mirror_paths(self, pts, mode=None, cx=None, cy=None):
+        return [[f(x, y) for x, y in pts]
+                for f in self._mirror_transforms(mode, cx, cy)]
+
+    @staticmethod
+    def _mirror_axis_test(mode, cx, cy):
+        """Predicate for the fundamental domain of ``mode`` — the one region
+        whose reflections under _mirror_transforms tile the whole design
+        without overlapping.
+
+        2-way is the left half-plane, 4-way the top-left quadrant, 8-way the
+        octant of that quadrant nearer the vertical axis. Getting this right is
+        what keeps the child's target halves from landing on top of each other:
+        reflect a *half* under 4-way and three of the copies overlap what is
+        already drawn.
+        """
+        if mode == "4-way":
+            return lambda x, y: x <= cx and y <= cy
+        if mode == "8-way":
+            return lambda x, y: (x <= cx and y <= cy
+                                 and (cx - x) >= (cy - y))
+        return lambda x, y: x <= cx          # 2-way
+
+    @staticmethod
+    def _mirror_axis_lines(mode, cx, cy, reach):
+        """The mirror lines themselves, as ((x1,y1),(x2,y2)) pairs, so a lesson
+        can show the child the axis they are reflecting across."""
+        lines = [((cx, cy - reach), (cx, cy + reach))]
+        if mode in ("4-way", "8-way"):
+            lines.append(((cx - reach, cy), (cx + reach, cy)))
+        if mode == "8-way":
+            d = reach * 0.7071
+            lines.append(((cx - d, cy - d), (cx + d, cy + d)))
+            lines.append(((cx - d, cy + d), (cx + d, cy - d)))
+        return lines
 
     def _mirror_centers(self, x, y):
         seen = {(round(x, 1), round(y, 1))}
@@ -7361,8 +9377,10 @@ class ShapeApp:
         try:
             self.canvas.delete("sim_dot")
             self.canvas.delete("sim_trail")
+            self.canvas.delete("kid_buddy")     # Kid Mode's bottle character
         except tk.TclError:
             pass
+        self._kid_clear_sparkles()
         try:
             self.simulate_btn.configure(
                 text="\u25b6 Simulate",
@@ -7530,7 +9548,15 @@ class ShapeApp:
 
         if not strokes:
             return []
+        return self._frames_from_strokes(strokes)
 
+    def _frames_from_strokes(self, strokes, max_frames=3500):
+        """Densify ``[(pts, smooth), …]`` into pen frames.
+
+        One flat list of (x, y) with a ``None`` between strokes to mark a pen
+        lift — the format _sim_tick and the Learn-Mode line visualisation both
+        animate. Shared so the two never drift apart in how they sample a path.
+        """
         frames = []
         for i, (stroke, smooth) in enumerate(strokes):
             if i > 0:
@@ -7542,7 +9568,6 @@ class ShapeApp:
             frames.extend(dense)
 
         # Cap length without scrambling stroke order.
-        max_frames = 3500
         real = [p for p in frames if p is not None]
         if len(real) > max_frames:
             stride = max(1, len(real) // max_frames)
@@ -7638,16 +9663,26 @@ class ShapeApp:
                 pass
 
         try:
-            self.canvas.delete("sim_dot")
-            r = 7
-            self.canvas.create_oval(
-                x - r - 3, y - r - 3, x + r + 3, y + r + 3,
-                fill="#bbf7d0", outline="", tags="sim_dot")
-            self.canvas.create_oval(
-                x - r, y - r, x + r, y + r,
-                fill=ACCENT_GREEN, outline="#ffffff", width=2, tags="sim_dot")
-            self.canvas.tag_raise("sim_trail")
-            self.canvas.tag_raise("sim_dot")
+            if self.kid_mode:
+                # Kid Mode: the pen tip is a powder-bottle character walking the
+                # line, leaving sparkles behind it.
+                if i % 3 == 0:
+                    self._kid_sparkle(self.canvas, x, y, tag="sim_dot")
+                self._kid_draw_buddy(self.canvas, x, y, i, tag="kid_buddy")
+                self.canvas.tag_raise("sim_trail")
+                self.canvas.tag_raise("sim_dot")
+                self.canvas.tag_raise("kid_buddy")
+            else:
+                self.canvas.delete("sim_dot")
+                r = 7
+                self.canvas.create_oval(
+                    x - r - 3, y - r - 3, x + r + 3, y + r + 3,
+                    fill="#bbf7d0", outline="", tags="sim_dot")
+                self.canvas.create_oval(
+                    x - r, y - r, x + r, y + r,
+                    fill=ACCENT_GREEN, outline="#ffffff", width=2, tags="sim_dot")
+                self.canvas.tag_raise("sim_trail")
+                self.canvas.tag_raise("sim_dot")
         except tk.TclError:
             pass
 

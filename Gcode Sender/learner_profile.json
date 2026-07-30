@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "level": 1,
+  "sessions": [
+    {
+      "design": "Chakra Wheel",
+      "complexity": "Medium",
+      "score": 9,
+      "out_of": 10,
+      "scored_by": "sample",
+      "level": 1,
+      "timestamp": "2026-07-30T11:31:26",
+      "photo": "..\\WRO Plotter\\Hard.jpg",
+      "improvements": [
+        "Make the white outlines more uniform.",
+        "Improve the smoothness of a few curved edges.",
+        "Ensure slightly more consistent spacing in the inner decorative patterns."
+      ]
+    },
+    {
+      "design": "Chakra Wheel \u2014 symmetry",
+      "complexity": "2-way (one mirror line)",
+      "score": 9,
+      "out_of": 10,
+      "scored_by": "sample",
+      "lesson": "symmetry",
+      "level": 1,
+      "timestamp": "2026-07-30T12:51:55",
+      "photo": "..\\WRO Plotter\\Hard.jpg",
+      "improvements": [
+        "Check both halves sit the same distance from the mirror line.",
+        "Match the curve direction on the reflected side.",
+        "Keep the mirrored tips level with the robot's tips."
+      ]
+    }
+  ],
+  "oneline_solved": []
+}

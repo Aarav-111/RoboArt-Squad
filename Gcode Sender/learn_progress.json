@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "last_learner": "",
+  "sessions": [
+    {
+      "learner": "Guest",
+      "design": "Peacock Bloom",
+      "complexity": "Hard",
+      "score": 9,
+      "out_of": 10,
+      "scored_by": "sample",
+      "timestamp": "2026-07-29T14:52:51",
+      "photo": "..\\WRO Plotter\\Hard.jpg",
+      "improvements": [
+        "Make the white outlines more uniform.",
+        "Improve the smoothness of a few curved edges.",
+        "Ensure slightly more consistent spacing in the inner decorative patterns."
+      ]
+    },
+    {
+      "learner": "Guest",
+      "design": "Chakra Wheel",
+      "complexity": "Medium",
+      "score": 9,
+      "out_of": 10,
+      "scored_by": "sample",
+      "timestamp": "2026-07-29T15:05:03",
+      "photo": "..\\WRO Plotter\\Hard.jpg",
+      "improvements": [
+        "Make the white outlines more uniform.",
+        "Improve the smoothness of a few curved edges.",
+        "Ensure slightly more consistent spacing in the inner decorative patterns."
+      ]
+    },
+    {
+      "learner": "Guest",
+      "design": "Peacock Bloom",
+      "complexity": "Hard",
+      "score": 9,
+      "out_of": 10,
+      "scored_by": "sample",
+      "timestamp": "2026-07-29T17:15:20",
+      "photo": "",
+      "improvements": [
+        "Make the white outlines more uniform.",
+        "Improve the smoothness of a few curved edges.",
+        "Ensure slightly more consistent spacing in the inner decorative patterns."
+      ]
+    },
+    {
+      "learner": "Guest",
+      "design": "Peacock Bloom",
+      "complexity": "Hard",
+      "score": 9,
+      "out_of": 10,
+      "scored_by": "sample",
+      "timestamp": "2026-07-29T17:15:51",
+      "photo": "..\\WRO Plotter\\Hard.jpg",
+      "improvements": [
+        "Make the white outlines more uniform.",
+        "Improve the smoothness of a few curved edges.",
+        "Ensure slightly more consistent spacing in the inner decorative patterns."
+      ]
+    }
+  ]
+}

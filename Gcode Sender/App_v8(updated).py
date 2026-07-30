@@ -118,8 +118,8 @@ RANGOLI_IMAGE_PROMPTS = [
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-MAX_X    = 28
-MAX_Y    = 28
+MAX_X    = 4
+MAX_Y    = 4
 
 NOZZLE_OPEN_Z   = 0.05
 NOZZLE_CLOSED_Z = 0.00
@@ -549,6 +549,123 @@ def _translate(paths, cx, cy):
     return [[(cx + x, cy - y) for x, y in path] for path in paths]
 
 
+# ── Polyline -> G2/G3 arc fitting ───────────────────────────────────────────
+# Every shape here (petals, rings, DXF imports, freehand pen strokes...) is
+# stored as a dense polyline. Turning that into G-code as one G1 per point is
+# what causes GRBL to decelerate to a near-stop at every vertex (hundreds of
+# them per shape). A true circle needs only one G2/G3 command; a general
+# curve doesn't have a single command for it, but it can still be covered by
+# a handful of circular arcs instead of dozens of tiny straight lines.
+# This greedily grows, from each point, the longest run that one circle can
+# explain within ARC_FIT_TOLERANCE, emits it as a single G2/G3, and only
+# falls back to G1 where the curvature won't fit a circle at all (or is a
+# genuinely straight run).
+ARC_FIT_TOLERANCE = 0.03            # mm — max deviation of a fitted arc from the points
+ARC_MIN_RUN       = 4               # points collapsed before an arc is worth it
+ARC_MAX_RADIUS    = 2000.0          # circles bigger than this are effectively straight
+ARC_MAX_SWEEP     = 2 * math.pi - 0.15  # stop short of a full circle (start==end is ambiguous)
+
+
+def _fit_circle(p1, p2, p3):
+    """Exact circumcircle through 3 points. Returns (cx, cy, r) or None if
+    the points are (numerically) collinear.
+
+    This is used with p1/p3 fixed as the arc's start/end point, which is
+    what actually matters: GRBL computes an arc's radius twice — once from
+    (current position -> center) via I/J, once from (center -> target X/Y)
+    — and alarms (error:33) if they disagree by more than a few microns.
+    A least-squares fit over every point in the run only bounds the
+    *average* error; the two points GRBL actually checks (the run's first
+    and last) could each sit up to `tol` off that average circle, on
+    opposite sides, so their disagreement could be ~2*tol — comfortably
+    enough to trip the alarm. Forcing the circle through the endpoints
+    exactly (with p2, a middle point, only choosing *which* of the
+    infinitely many circles through p1/p3 to use) guarantees the two radii
+    GRBL computes are identical by construction, not just close."""
+    ax, ay = p1
+    bx, by = p2
+    cx0, cy0 = p3
+    d = 2 * (ax * (by - cy0) + bx * (cy0 - ay) + cx0 * (ay - by))
+    if abs(d) < 1e-9:
+        return None
+    a2 = ax * ax + ay * ay
+    b2 = bx * bx + by * by
+    c2 = cx0 * cx0 + cy0 * cy0
+    ux = (a2 * (by - cy0) + b2 * (cy0 - ay) + c2 * (ay - by)) / d
+    uy = (a2 * (cx0 - bx) + b2 * (ax - cx0) + c2 * (bx - ax)) / d
+    r = math.hypot(ax - ux, ay - uy)
+    return (ux, uy, r)
+
+
+def _arc_sweep_and_code(pts, cx, cy):
+    """If pts wind steadily (no direction reversal) around (cx, cy), return
+    (total_sweep_radians, grbl_code). None if the winding reverses, which
+    means a single arc can't represent this run even though the points
+    happen to lie on a circle (e.g. it doubles back on itself)."""
+    angles = [math.atan2(y - cy, x - cx) for x, y in pts]
+    unwrapped = [angles[0]]
+    for a in angles[1:]:
+        da = a - unwrapped[-1]
+        while da > math.pi:
+            da -= 2 * math.pi
+        while da < -math.pi:
+            da += 2 * math.pi
+        unwrapped.append(unwrapped[-1] + da)
+    diffs = [unwrapped[k + 1] - unwrapped[k] for k in range(len(unwrapped) - 1)]
+    if all(d >= -1e-9 for d in diffs):
+        total = unwrapped[-1] - unwrapped[0]
+    elif all(d <= 1e-9 for d in diffs):
+        total = unwrapped[-1] - unwrapped[0]
+    else:
+        return None
+    if abs(total) < 1e-6:
+        return None
+    return (abs(total), 3 if total > 0 else 2)  # CCW -> G3, CW -> G2
+
+
+def _fit_arcs(points, tol=ARC_FIT_TOLERANCE):
+    """Collapse a dense polyline into a mix of straight and circular moves.
+
+    Returns a list of segments describing the move *to* each point from
+    wherever the previous segment ended (points[0] is the start and is not
+    itself part of the output):
+      ('line', (x, y))
+      ('arc',  (x, y), cx, cy, grbl_code)   # grbl_code is 2 (G2) or 3 (G3)
+    """
+    segments = []
+    n = len(points)
+    i = 0
+    while i < n - 1:
+        best = None  # (end_index, cx, cy, code)
+        if n - i > ARC_MIN_RUN:
+            j = i + ARC_MIN_RUN
+            while j < n:
+                window = points[i:j + 1]
+                mid = points[i + (j - i) // 2]
+                circle = _fit_circle(points[i], mid, points[j])
+                if circle is None:
+                    break
+                cx, cy, r = circle
+                if r > ARC_MAX_RADIUS:
+                    break
+                if any(abs(math.hypot(px - cx, py - cy) - r) > tol
+                       for px, py in window):
+                    break
+                sweep = _arc_sweep_and_code(window, cx, cy)
+                if sweep is None or sweep[0] > ARC_MAX_SWEEP:
+                    break
+                best = (j, cx, cy, sweep[1])
+                j += 1
+        if best is not None:
+            j, cx, cy, code = best
+            segments.append(('arc', points[j], cx, cy, code))
+            i = j
+        else:
+            segments.append(('line', points[i + 1]))
+            i += 1
+    return segments
+
+
 def _circle_ring(size, rings=1, points_per_ring=64, inner_ratio=0.3):
     paths = []
     for r in range(rings):
@@ -802,13 +919,14 @@ class ShapeApp:
         self._pending_raw_gcode   = None
 
         self.shape_type           = tk.StringVar(value="Select")
-        self.feed_rate            = tk.StringVar(value="High (default)")
+        self.feed_rate            = tk.StringVar(value="Low (default)")
         self.port_var             = tk.StringVar()
         self.size_val             = tk.IntVar(value=50)
         self.is_moving            = False
         self.last_ports           = []
         self.is_sending           = False
         self.is_paused            = False
+        self.cancel_requested     = False
         self.pause_event          = threading.Event()
         self.pause_event.set()
         self.hint_popup           = None
@@ -884,6 +1002,9 @@ class ShapeApp:
 
         # One-shot callback fired on the main thread when a G-code stream ends.
         self._on_send_complete = None
+        # Serial handle for the in-flight send_gcode() stream, if any — lets
+        # the pause button issue GRBL real-time feed-hold/resume ('!'/'~').
+        self._active_serial = None
 
         self._design_options_popup = None
         self._edit_popup = None
@@ -937,6 +1058,12 @@ class ShapeApp:
             width=40, height=34, font_size=14, corner_radius=8)
         self.pause_btn.pack(side="left", padx=(8, 0))
         self.pause_btn.configure(state="disabled")
+
+        self.cancel_btn = self._color_button(
+            btn_wrap, "✕", self.cancel_gcode_streaming, "#b91c1c",
+            width=40, height=34, font_size=14, corner_radius=8)
+        self.cancel_btn.pack(side="left", padx=(8, 0))
+        self.cancel_btn.configure(state="disabled")
 
 
         prog_wrap = tk.Frame(bottom, bg=BG_DARK)
@@ -1437,7 +1564,7 @@ class ShapeApp:
         slot = _row("Speed", "Feed rate used when streaming G-code.")
         self.feed_combo = ctk.CTkComboBox(
             slot, variable=self.feed_rate,
-            values=["Low", "Medium", "High (default)"], state="readonly",
+            values=["Aqua Low", "Super Low", "Low (default)", "Medium", "High"], state="readonly",
             width=170, fg_color=BG_INPUT, border_color=GLASS_EDGE,
             button_color=GLASS_EDGE, button_hover_color=ACCENT_AMBER,
             text_color=TEXT_PRIMARY, dropdown_fg_color=BG_CARD,
@@ -1831,21 +1958,21 @@ class ShapeApp:
         DOT_COLOR  = "#c8c8e0"
         MAJOR_DOT  = "#9090c0"
         r_minor, r_major = 1, 2
-        for ix in range(0, MAX_X + 1, 5):
-            for iy in range(0, MAX_Y + 1, 5):
+        for ix in range(0, MAX_X + 1, 1):
+            for iy in range(0, MAX_Y + 1, 1):
                 px  = x0 + (ix / MAX_X) * GRAPH_W
                 py  = y1 - (iy / MAX_Y) * GRAPH_H
-                major = (ix % 10 == 0) and (iy % 10 == 0)
+                major = (ix % 1 == 0) and (iy % 1 == 0)
                 r   = r_major if major else r_minor
                 col = MAJOR_DOT if major else DOT_COLOR
                 c.create_oval(px-r, py-r, px+r, py+r,
                               fill=col, outline="", tags="grid")
 
-        for ix in range(0, MAX_X + 1, 10):
+        for ix in range(0, MAX_X + 1, 1):
             px = x0 + (ix / MAX_X) * GRAPH_W
             c.create_text(px, y1 + 14, text=str(ix), fill="#8080a0",
                           font=("Consolas", 8), tags="grid")
-        for iy in range(0, MAX_Y + 1, 10):
+        for iy in range(0, MAX_Y + 1, 1):
             py = y1 - (iy / MAX_Y) * GRAPH_H
             c.create_text(x0 - 8, py, text=str(iy), fill="#8080a0",
                           font=("Consolas", 8), anchor="e", tags="grid")
@@ -2805,7 +2932,7 @@ class ShapeApp:
             base_prompt = random.choice(RANGOLI_IMAGE_PROMPTS)
         prompt = (
             base_prompt +
-            " This design will be physically drawn at a small 28mm x 28mm "
+            " This design will be physically drawn at a small 4mm x 5mm "
             "scale by a powder-dispensing robot, so keep it to ONE motif "
             "only: a centre circle with ONE ring of 6-9 petals (or a single "
             "shape repeated 6-9 times), plus optionally a thin outer ring "
@@ -3930,8 +4057,8 @@ class ShapeApp:
         self._learn_streaming = False
         if self.port_var.get() and not self.is_sending:
             part = self._learn_parts[idx]
-            _SPEED_MAP = {"Low": 150, "Medium": 200, "High (default)": 250}
-            f = _SPEED_MAP.get(self.feed_rate.get(), 250)
+            _SPEED_MAP = {"Aqua Low": 50, "Super Low": 100, "Low (default)": 150, "Medium": 200, "High": 250}
+            f = _SPEED_MAP.get(self.feed_rate.get(), 150)
             lines = ["$X", "G21", "G90", f"F{f}"]
             lines += self._paths_gcode_lines([part], f)
             lines += [f"G1 Z0.00 F{f}", "G1 X0", "G1 Y0"]
@@ -4349,79 +4476,14 @@ class ShapeApp:
         self._set_camera_status(f"✓ Photo saved to {name}", ACCENT_GREEN)
         self.log_to_console(f"Camera: photo saved — {path}", "recv")
 
-    def _evaluate_learn_rangoli(self):
-        """Verdict shown on the result card.
-
-        TEMPORARY placeholder values so the screen can be demoed now. In the
-        next version this is the single spot that will call the real vision
-        model (reuse the _ask_ai_for_fx_coordinates pattern: send
-        self._learn_photo_path to the API and parse a JSON verdict). Until then
-        it returns fixed sample values and touches no AI code path.
-        """
-        design     = self._learn_design or "Your Rangoli"
-        complexity = PRESET_DESIGNS.get(self._learn_design, {}).get(
-            "difficulty", "Medium")
-        return {
-            "name":        design,
-            "complexity":  complexity,
-            "score":       9,          # TODO(next version): real AI score
-            "out_of":      10,
-            "improvements": [          # TODO(next version): real AI feedback
-                "Make the white outlines more uniform.",
-                "Improve the smoothness of a few curved edges.",
-                "Ensure slightly more consistent spacing in the inner "
-                "decorative patterns.",
-            ],
-        }
-
     def _show_learn_evaluation(self):
-        """Neon 'RANGOLI RESULT' card — the Learn-Mode finish screen.
-
-        Merges the old (blank) evaluation popup and the 'Rangoli complete!'
-        popup into a single result screen styled after the neon mockup. Its two
-        buttons keep the original completion actions (learn another / finish).
-        """
-        import math, random
-        import tkinter.font as _tkfont
-
-        verdict = self._evaluate_learn_rangoli()
-        CARD_BG = "#0b0b12"
-
-        # ── palette + tiny colour helpers (local; only this screen uses them) ──
-        NEON = ["#f472b6", "#a78bfa", "#22d3ee", "#10b981", "#f97316", "#f472b6"]
-        def _h2r(h):
-            h = h.lstrip("#"); return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-        def _r2h(r):
-            return "#%02x%02x%02x" % tuple(max(0, min(255, int(c))) for c in r)
-        def _lerp(a, b, t):
-            ra, rb = _h2r(a), _h2r(b)
-            return _r2h(tuple(ra[i] + (rb[i] - ra[i]) * t for i in range(3)))
-        def _grad(t):                       # t in [0,1) across the NEON stops
-            n = len(NEON) - 1
-            t = max(0.0, min(0.999999, t)) * n
-            i = int(t); return _lerp(NEON[i], NEON[i + 1], t - i)
-        def _blend(fg, t):                  # weight t of fg over the card bg
-            return _lerp(CARD_BG, fg, t)
-
-        # ── layout geometry (running cursor so nothing is mis-counted) ─────────
-        W = 540
-        pad = 22
-        ib = 56                              # icon-tile size
-        tl = pad + 14 + ib + 18              # text left edge inside a row
-        ROW_H, GAP, IMPR_H, BTN_H = 74, 12, 152, 44
-        y = 150
-        name_y = y;  y += ROW_H + GAP
-        comp_y = y;  y += ROW_H + GAP
-        score_y = y; y += ROW_H + GAP
-        impr_y = y;  y += IMPR_H + GAP
-        btn_y = y
-        H = btn_y + BTN_H * 2 + 12 + 18
-
-        # ── window shell (mirrors _learn_shell mechanics) ─────────────────────
+        """Placeholder shown just before the course wraps up — deliberately
+        blank apart from its title. Click anywhere to go on to the summary."""
         self._close_learn_popup()
         self.root.update_idletasks()
-        sx = self.root.winfo_screenwidth() // 2 - W // 2
-        sy = max(20, self.root.winfo_screenheight() // 2 - H // 2)
+        W, H = 440, 200
+        sx = self.root.winfo_screenwidth()  // 2 - W // 2
+        sy = self.root.winfo_screenheight() // 2 - H // 2
 
         popup = tk.Toplevel(self.root)
         popup.overrideredirect(True)
@@ -4433,182 +4495,18 @@ class ShapeApp:
         popup.transient(self.root)
         self._learn_popup = popup
 
-        cv = tk.Canvas(popup, width=W, height=H, bg=BG_DARK, highlightthickness=0)
-        cv.pack(fill="both", expand=True)
-        self._draw_rounded_rect(cv, 8, 8, W - 8, H - 8, radius=26, fill=CARD_BG)
+        glass = tk.Canvas(popup, width=W, height=H, bg=BG_DARK,
+                          highlightthickness=0, cursor="hand2")
+        glass.pack(fill="both", expand=True)
+        self._draw_rounded_rect(glass, 4, 4, W-4, H-4, radius=22,
+                                fill=BG_CARD, outline=ACCENT_PINK, width=2)
+        glass.create_text(W // 2, H // 2, text="Rangoli evaluation",
+                          fill=TEXT_PRIMARY, font=("Segoe UI", 20, "bold"))
+        glass.bind("<Button-1>", lambda e: self._show_learn_complete())
+        popup.bind("<Button-1>", lambda e: self._show_learn_complete())
 
-        # ── neon gradient border + dim halo behind it ────────────────────────
-        def _perimeter(x1, y1, x2, y2, r):
-            pts, seg = [], [
-                ("edge", (x1 + r, y1), (x2 - r, y1)),
-                ("arc",  (x2 - r, y1 + r), -90, 0),
-                ("edge", (x2, y1 + r), (x2, y2 - r)),
-                ("arc",  (x2 - r, y2 - r), 0, 90),
-                ("edge", (x2 - r, y2), (x1 + r, y2)),
-                ("arc",  (x1 + r, y2 - r), 90, 180),
-                ("edge", (x1, y2 - r), (x1, y1 + r)),
-                ("arc",  (x1 + r, y1 + r), 180, 270),
-            ]
-            for e in seg:
-                if e[0] == "edge":
-                    (ax, ay), (bx, by) = e[1], e[2]
-                    for k in range(9):
-                        t = k / 9.0
-                        pts.append((ax + (bx - ax) * t, ay + (by - ay) * t))
-                else:
-                    ccx, ccy = e[1]; a0, a1 = e[2], e[3]
-                    for k in range(9):
-                        ang = math.radians(a0 + (a1 - a0) * (k / 9.0))
-                        pts.append((ccx + r * math.cos(ang), ccy + r * math.sin(ang)))
-            return pts
-
-        def _grad_border(x1, y1, x2, y2, r, width, dim=1.0):
-            pts = _perimeter(x1, y1, x2, y2, r)
-            n = len(pts)
-            for i in range(n):
-                a, b = pts[i], pts[(i + 1) % n]
-                col = _grad(i / n)
-                if dim < 1.0:
-                    col = _blend(col, dim)
-                cv.create_line(a[0], a[1], b[0], b[1],
-                               fill=col, width=width, capstyle="round")
-
-        _grad_border(6, 6, W - 6, H - 6, 28, width=5, dim=0.35)   # halo
-        _grad_border(8, 8, W - 8, H - 8, 26, width=2)             # crisp edge
-
-        # ── close button ─────────────────────────────────────────────────────
-        close_lbl = tk.Label(popup, text="✕", bg=CARD_BG, fg=TEXT_DIM,
-                             font=("Segoe UI", 13, "bold"), cursor="hand2")
-        close_lbl.place(x=W - 44, y=22)
-        close_lbl.bind("<Button-1>", lambda e: self._exit_learn_mode())
-
-        # ── header: check badge, confetti, gradient title ────────────────────
-        hx = W // 2
-        cv.create_oval(hx - 30, 24, hx + 30, 84, outline=ACCENT_GREEN, width=3)
-        cv.create_oval(hx - 24, 30, hx + 24, 78,
-                       outline=_blend(ACCENT_GREEN, 0.5), width=6)
-        cv.create_line(hx - 13, 55, hx - 3, 66, hx + 16, 41,
-                       fill=ACCENT_GREEN, width=4,
-                       capstyle="round", joinstyle="round")
-        rng = random.Random(7)
-        for _ in range(16):
-            ang = rng.uniform(0, 6.2832); dist = rng.uniform(36, 62)
-            px = hx + dist * math.cos(ang)
-            py = 54 + dist * math.sin(ang) * 0.72
-            c = NEON[rng.randrange(len(NEON))]
-            cv.create_oval(px - 2, py - 2, px + 2, py + 2, fill=c, outline="")
-
-        tfont = _tkfont.Font(family="Segoe UI", size=26, weight="bold")
-        title = "RANGOLI RESULT"
-        tx = hx - tfont.measure(title) // 2
-        for i, ch in enumerate(title):
-            col = _lerp("#f472b6", "#f97316", i / max(1, len(title) - 1))
-            cv.create_text(tx, 116, text=ch, anchor="w", fill=col, font=tfont)
-            tx += tfont.measure(ch)
-
-        # ── row helpers ──────────────────────────────────────────────────────
-        def _field(y0, h, accent, glow=False):
-            self._draw_rounded_rect(
-                cv, pad, y0, W - pad, y0 + h, radius=16, fill="#101018",
-                outline=_blend(accent, 0.5 if glow else 0.3),
-                width=2 if glow else 1)
-
-        def _icon(x, y0, accent, kind):
-            self._draw_rounded_rect(cv, x, y0, x + ib, y0 + ib, radius=12,
-                                    fill=_blend(accent, 0.14),
-                                    outline=accent, width=2)
-            g = 15
-            x1, y1, x2, y2 = x + g, y0 + g, x + ib - g, y0 + ib - g
-            gcx, gcy, gw = (x1 + x2) / 2, (y1 + y2) / 2, (x2 - x1)
-            if kind == "flower":
-                for a in range(6):
-                    ang = math.radians(a * 60)
-                    ox = gcx + gw * 0.26 * math.cos(ang)
-                    oy = gcy + gw * 0.26 * math.sin(ang)
-                    cv.create_oval(ox - gw * 0.17, oy - gw * 0.17,
-                                   ox + gw * 0.17, oy + gw * 0.17,
-                                   outline=accent, width=2)
-                cv.create_oval(gcx - gw * 0.12, gcy - gw * 0.12,
-                               gcx + gw * 0.12, gcy + gw * 0.12,
-                               outline=accent, width=2)
-            elif kind == "bars":
-                bw = gw / 4.4
-                for i, hh in enumerate((0.42, 0.72, 1.0)):
-                    bx = x1 + i * (bw + bw * 0.5)
-                    self._draw_rounded_rect(cv, bx, y2 - (y2 - y1) * hh, bx + bw,
-                                            y2, radius=3, outline=accent, width=2)
-            elif kind == "star":
-                pts = []
-                for i in range(10):
-                    rr = gw * 0.5 if i % 2 == 0 else gw * 0.22
-                    ang = math.radians(-90 + i * 36)
-                    pts += [gcx + rr * math.cos(ang), gcy + rr * math.sin(ang)]
-                cv.create_polygon(pts, outline=accent, width=2, fill="")
-            elif kind == "bulb":
-                cv.create_oval(gcx - gw * 0.3, y1, gcx + gw * 0.3, y1 + gw * 0.6,
-                               outline=accent, width=2)
-                cv.create_line(gcx - gw * 0.16, y1 + gw * 0.63,
-                               gcx + gw * 0.16, y1 + gw * 0.63, fill=accent, width=2)
-                cv.create_line(gcx - gw * 0.12, y1 + gw * 0.76,
-                               gcx + gw * 0.12, y1 + gw * 0.76, fill=accent, width=2)
-
-        # ── Rangoli Name ──────────────────────────────────────────────────────
-        _field(name_y, ROW_H, ACCENT_PURP)
-        _icon(pad + 14, name_y + (ROW_H - ib) // 2, ACCENT_PURP, "flower")
-        cv.create_text(tl, name_y + 24, text="Rangoli Name", anchor="w",
-                       fill=TEXT_DIM, font=("Segoe UI", 11))
-        cv.create_text(tl, name_y + 49, text=verdict["name"], anchor="w",
-                       fill=TEXT_PRIMARY, font=("Segoe UI", 17, "bold"))
-
-        # ── Complexity ────────────────────────────────────────────────────────
-        _field(comp_y, ROW_H, ACCENT_CYAN)
-        _icon(pad + 14, comp_y + (ROW_H - ib) // 2, ACCENT_CYAN, "bars")
-        cv.create_text(tl, comp_y + 24, text="Complexity", anchor="w",
-                       fill=TEXT_DIM, font=("Segoe UI", 11))
-        cv.create_text(tl, comp_y + 49, text=verdict["complexity"], anchor="w",
-                       fill=TEXT_PRIMARY, font=("Segoe UI", 17, "bold"))
-
-        # ── Total Score ───────────────────────────────────────────────────────
-        _field(score_y, ROW_H, ACCENT_GREEN, glow=True)
-        _icon(pad + 14, score_y + (ROW_H - ib) // 2, ACCENT_GREEN, "star")
-        cv.create_text(tl, score_y + 22, text="Total Score", anchor="w",
-                       fill=TEXT_DIM, font=("Segoe UI", 11))
-        sfont = _tkfont.Font(family="Segoe UI", size=24, weight="bold")
-        cv.create_text(tl, score_y + 50, text=str(verdict["score"]), anchor="w",
-                       fill=ACCENT_GREEN, font=sfont)
-        cv.create_text(tl + sfont.measure(str(verdict["score"])) + 6, score_y + 52,
-                       text=f"/ {verdict['out_of']}", anchor="w",
-                       fill=TEXT_PRIMARY, font=("Segoe UI", 14, "bold"))
-
-        # ── Improvements ──────────────────────────────────────────────────────
-        _field(impr_y, IMPR_H, ACCENT_AMBER, glow=True)
-        _icon(pad + 14, impr_y + 16, ACCENT_AMBER, "bulb")
-        cv.create_text(tl, impr_y + 26, text="Improvements", anchor="w",
-                       fill=TEXT_DIM, font=("Segoe UI", 11))
-        ty = impr_y + 52
-        for tip in verdict["improvements"]:
-            cv.create_oval(tl, ty + 5, tl + 6, ty + 11, fill=ACCENT_AMBER, outline="")
-            item = cv.create_text(tl + 16, ty, text=tip, anchor="nw",
-                                  fill=TEXT_PRIMARY, font=("Segoe UI", 11),
-                                  width=W - tl - pad - 20)
-            bb = cv.bbox(item)
-            ty = (bb[3] if bb else ty + 20) + 8
-
-        # ── buttons (original completion actions, merged in) ──────────────────
-        b1 = self._color_button(popup, "🏠  Learn another design",
-                                self._open_learn_gallery, ACCENT_GREEN,
-                                width=W - 2 * pad, height=BTN_H,
-                                font_size=13, corner_radius=14)
-        b1.place(x=pad, y=btn_y)
-        b2 = self._color_button(popup, "Finish", self._exit_learn_mode,
-                                ACCENT_PURP, width=W - 2 * pad, height=BTN_H,
-                                font_size=13, corner_radius=14)
-        b2.place(x=pad, y=btn_y + BTN_H + 12)
-
-        self.log_to_console(
-            f"Learn Mode: result — {verdict['name']} ({verdict['complexity']}), "
-            f"score {verdict['score']}/{verdict['out_of']}.", "recv")
-        self._fade(popup, 0.0, 0.98, 0.08)
+        self.log_to_console("Learn Mode: rangoli evaluation.", "info")
+        self._fade(popup, 0.0, 0.97, 0.08)
         popup.lift()
         popup.focus_force()
 
@@ -4702,6 +4600,11 @@ class ShapeApp:
             dup['x'], dup['y'] = mx, my
             self.shapes.append(dup)
         self.selected_shape_index = len(self.shapes) - 1
+        if not preset and self.shape_type.get() != "Select":
+            # Robot-test shape placed: require re-selecting from the menu
+            # before another one can be dropped on the canvas.
+            self.shape_type.set("Select")
+            self.hide_hint_popup(instant=True)
         self.redraw()
 
     def on_shift_click(self, event):
@@ -6249,17 +6152,41 @@ class ShapeApp:
         for path in paths:
             if len(path) < 2:
                 continue
-            mx, my = self.to_machine(*path[0])
+            mpts = [self.to_machine(px, py) for px, py in path]
+            # Every coordinate in this block uses 4-decimal precision, not
+            # just the arcs. GRBL derives an arc's radius twice — once from
+            # its current position, once from the I/J target — and alarms
+            # (error:33) if they disagree by more than a few microns. If a
+            # preceding G1 line were rounded to .2f while the arc math uses
+            # .4f, the "current position" GRBL lands on after that G1 is
+            # already ~0.005mm off from what the arc was fitted against,
+            # which is exactly big enough to trip that check. Keeping one
+            # precision for the whole path keeps `cur` (what GRBL actually
+            # thinks its position is) consistent with the arc fit.
+            start_x, start_y = round(mpts[0][0], 4), round(mpts[0][1], 4)
             lines += [
                 f"G1 Z0.00 F{f}",
-                f"G1 X{mx:.2f} F{f}",
-                f"G1 Y{my:.2f} F{f}",
+                f"G1 X{start_x:.4f} F{f}",
+                f"G1 Y{start_y:.4f} F{f}",
                 "M3",
                 f"G1 Z0.05 F{f}",
             ]
-            for px, py in path[1:]:
-                mx, my = self.to_machine(px, py)
-                lines.append(f"G1 X{mx:.2f} Y{my:.2f} F{f}")
+            cur = (start_x, start_y)
+            for seg in _fit_arcs(mpts):
+                if seg[0] == 'line':
+                    ex, ey = round(seg[1][0], 4), round(seg[1][1], 4)
+                    lines.append(f"G1 X{ex:.4f} Y{ey:.4f} F{f}")
+                    cur = (ex, ey)
+                else:
+                    _, end, cx, cy, code = seg
+                    ex, ey = round(end[0], 4), round(end[1], 4)
+                    iof = round(cx - cur[0], 4)
+                    jof = round(cy - cur[1], 4)
+                    letter = "G2" if code == 2 else "G3"
+                    lines.append(
+                        f"{letter} X{ex:.4f} Y{ey:.4f} "
+                        f"I{iof:.4f} J{jof:.4f} F{f}")
+                    cur = (ex, ey)
             lines.append("M5")
         return lines
 
@@ -6267,8 +6194,8 @@ class ShapeApp:
         return self._paths_gcode_lines(self._shape_paths(s), f)
 
     def generate_gcode(self):
-        _SPEED_MAP = {"Low": 150, "Medium": 200, "High (default)": 250}
-        f = _SPEED_MAP.get(self.feed_rate.get(), 250)
+        _SPEED_MAP = {"Aqua Low": 50, "Super Low": 100, "Low (default)": 150, "Medium": 200, "High": 250}
+        f = _SPEED_MAP.get(self.feed_rate.get(), 150)
         lines = ["$X", "G21", "G90", f"F{f}"]
 
         has_colour = any(s.get('colour') or s.get('path_colours')
@@ -6334,24 +6261,58 @@ class ShapeApp:
             return
         self.is_sending = True
         self.is_paused = False
+        self.cancel_requested = False
         self.pause_event.set()
         self.pause_btn.configure(text="⏸", state="normal")
+        self.cancel_btn.configure(state="normal")
         self.send_btn.configure(
             state="disabled", fg_color="#0f766e", hover_color="#0f766e",
             text_color=TEXT_DIM)
         threading.Thread(target=self.send_gcode, daemon=True).start()
 
+    def cancel_gcode_streaming(self):
+        if not self.is_sending or self.cancel_requested: return
+        self.cancel_requested = True
+        # Unblock a paused stream so the send loop can notice the cancel and
+        # unwind instead of sitting on pause_event.wait() forever.
+        self.is_paused = False
+        self.pause_event.set()
+        self.log_to_console("Cancelling print...", "info")
+        ser = getattr(self, "_active_serial", None)
+        if ser is not None:
+            try:
+                ser.write(b'!')          # feed hold — stop motion now
+                ser.write(b'\x18')       # soft reset — clear GRBL's queue
+            except Exception:
+                pass
+        self.cancel_btn.configure(state="disabled")
+
     def toggle_pause(self):
-        if not self.is_sending: return
+        if not self.is_sending or self.cancel_requested: return
         self.is_paused = not self.is_paused
+        ser = getattr(self, "_active_serial", None)
         if self.is_paused:
             self.pause_event.clear()
             self.pause_btn.configure(text="▶")
             self.log_to_console("Print paused.", "info")
+            # Real-time feed-hold: pause_event only stops us sending *new*
+            # lines, but GRBL's buffer can hold several moves already sent
+            # (needed to avoid jerk — see send_gcode). Without this, motion
+            # keeps running for a beat after the button is pressed.
+            if ser is not None:
+                try:
+                    ser.write(b'!')
+                except Exception:
+                    pass
         else:
             self.pause_event.set()
             self.pause_btn.configure(text="⏸")
             self.log_to_console("Print resumed.", "info")
+            if ser is not None:
+                try:
+                    ser.write(b'~')
+                except Exception:
+                    pass
 
     def send_gcode(self):
         self.log_to_console("Generating G-code...", "info")
@@ -6379,36 +6340,35 @@ class ShapeApp:
                 lines = [l.strip() for l in fh if l.strip()]
             total = max(len(lines), 1)
 
-            for idx, clean in enumerate(lines):
-                if clean.startswith(";COLOUR_SWITCH:"):
-                    colour = clean.split(":", 1)[1]
-                    self.log_to_console(
-                        f"At origin — Z stepper opened the nozzle. Empty out "
-                        f"the current colour, then click 'Colour emptied, "
-                        f"continue' to add {colour}.",
-                        "info")
-                    event = threading.Event()
-                    self.root.after(
-                        0, self._arm_colour_emptied_button, event, colour)
-                    event.wait()
-                    self.log_to_console(
-                        f"Colour emptied — closing nozzle and adding {colour} "
-                        f"now. Resuming in 4s...",
-                        "info")
-                    time.sleep(4)
-                    progress = (idx + 1) / total
-                    self.progress_var.set(progress)
-                    self.root.after(0, lambda p=progress: (
-                        self.progress_bar.set(p),
-                        self.sidebar_progress_bar.set(p),
-                        self.sidebar_pct_label.config(text=f"{int(p * 100)}%"),
-                    ))
-                    continue
-                self.pause_event.wait()
-                self.log_to_console(f"→ {clean}", "send")
-                ser.write((clean + "\n").encode())
+            # GRBL streaming, character-counting protocol. Sending one line
+            # and blocking for its "ok" before sending the next (the old
+            # approach) starves GRBL's motion planner — it never has more
+            # than one move queued, so it decelerates to a stop at the end
+            # of every single segment instead of blending them into one
+            # continuous, accelerating path. Keeping GRBL's ~127-byte RX
+            # buffer full lets the planner look ahead across many queued
+            # moves, which is what actually removes the jerk.
+            RX_BUFFER_SIZE = 127
+            self._active_serial = ser
+            pending = []  # [(line_len, line_idx, clean)] sent, awaiting "ok"
+
+            def _report_progress(line_idx):
+                progress = (line_idx + 1) / total
+                self.progress_var.set(progress)
+                self.root.after(0, lambda p=progress: (
+                    self.progress_bar.set(p),
+                    self.sidebar_progress_bar.set(p),
+                    self.sidebar_pct_label.config(text=f"{int(p * 100)}%"),
+                ))
+
+            def _await_one_ack():
+                """Block for the response to the oldest line still in flight."""
+                nonlocal grbl_ok
                 silent = 0
                 while True:
+                    if self.cancel_requested:
+                        grbl_ok = False
+                        return False
                     res = ser.readline().decode().strip()
                     if res:
                         self.log_to_console(f"← {res}",
@@ -6422,24 +6382,77 @@ class ShapeApp:
                             self.log_to_console(
                                 "No reply from GRBL for 90s — giving up on "
                                 "this job.", "err")
-                            break
+                            return False
                         continue
                     low = res.lower()
                     if "error" in low or "alarm" in low:
                         grbl_ok = False
-                        break
+                        return False
                     if "ok" in low:
+                        _, line_idx, _ = pending.pop(0)
+                        _report_progress(line_idx)
+                        return True
+                    # Any other reply (status reports, etc.) — keep waiting
+                    # for the "ok" that actually retires the oldest line.
+
+            for idx, clean in enumerate(lines):
+                if self.cancel_requested:
+                    grbl_ok = False
+                    break
+                if clean.startswith(";COLOUR_SWITCH:"):
+                    # Drain everything already queued on GRBL before pausing
+                    # for a physical colour change — nothing should still be
+                    # moving while the operator's hands are at the nozzle.
+                    while pending and grbl_ok:
+                        if not _await_one_ack():
+                            break
+                    if not grbl_ok:
+                        break
+                    colour = clean.split(":", 1)[1]
+                    self.log_to_console(
+                        f"At origin — Z stepper opened the nozzle. Empty out "
+                        f"the current colour, then click 'Colour emptied, "
+                        f"continue' to add {colour}.",
+                        "info")
+                    event = threading.Event()
+                    self.root.after(
+                        0, self._arm_colour_emptied_button, event, colour)
+                    while not event.wait(timeout=0.5):
+                        if self.cancel_requested:
+                            grbl_ok = False
+                            break
+                    if self.cancel_requested:
+                        break
+                    self.log_to_console(
+                        f"Colour emptied — closing nozzle and adding {colour} "
+                        f"now. Resuming in 4s...",
+                        "info")
+                    time.sleep(4)
+                    _report_progress(idx)
+                    continue
+
+                self.pause_event.wait()
+                if not grbl_ok:
+                    break
+                line_bytes = len(clean) + 1  # +1 for the trailing "\n"
+                # Block for acks until this line would fit in GRBL's buffer.
+                while pending and (
+                        sum(l for l, _, _ in pending) + line_bytes > RX_BUFFER_SIZE):
+                    if not _await_one_ack():
                         break
                 if not grbl_ok:
                     break
-                progress = (idx + 1) / total
-                self.progress_var.set(progress)
-                self.root.after(0, lambda p=progress: (
-                    self.progress_bar.set(p),
-                    self.sidebar_progress_bar.set(p),
-                    self.sidebar_pct_label.config(text=f"{int(p * 100)}%"),
-                ))
+                self.log_to_console(f"→ {clean}", "send")
+                ser.write((clean + "\n").encode())
+                pending.append((line_bytes, idx, clean))
 
+            # Drain any moves still in flight so progress/completion reflect
+            # what GRBL has actually finished, not just what was sent.
+            while pending and grbl_ok:
+                if not _await_one_ack():
+                    break
+
+            self._active_serial = None
             ser.close()
             if grbl_ok:
                 grbl_done = True
@@ -6448,6 +6461,8 @@ class ShapeApp:
                 self.root.after(
                     0, lambda: self.sidebar_pct_label.config(text="100%"))
                 self.log_to_console("Job complete.", "recv")
+            elif self.cancel_requested:
+                self.log_to_console("Print cancelled.", "info")
             else:
                 self.log_to_console(
                     "Job stopped early — GRBL reported a problem.", "err")
@@ -6455,11 +6470,15 @@ class ShapeApp:
             grbl_ok = False
             self.log_to_console(f"Connection Error: {e}", "err")
         finally:
+            self._active_serial = None
             self.is_sending = False
             self.is_paused = False
+            self.cancel_requested = False
             self.pause_event.set()
             self.root.after(0, lambda: self.pause_btn.configure(
                 text="⏸", state="disabled"))
+            self.root.after(0, lambda: self.cancel_btn.configure(
+                state="disabled"))
             self.send_btn.configure(
                 state="normal", fg_color="#0d9488", hover_color="#0d9488",
                 text_color="#ffffff")
