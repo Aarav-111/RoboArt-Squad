@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="202" height="28" viewBox="0 0 202 28" role="img" aria-label="Virtual round: 2nd place">
+  <defs><clipPath id="c"><rect width="202" height="28" rx="14"/></clipPath></defs>
+  <g clip-path="url(#c)"><rect width="116" height="28" fill="#374151"/><rect x="116" width="86" height="28" fill="#ec4899"/></g>
+  <g fill="#ffffff" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" text-anchor="middle">
+    <text x="58.0" y="18.5">Virtual round</text><text x="159.0" y="18.5">2nd place</text></g>
+</svg>

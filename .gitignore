@@ -1,0 +1,19 @@
+# Secrets
+openai_key.txt
+*.key
+.env
+# Local data (accounts, learner history, camera captures)
+*.db
+*.db-shm
+*.db-wal
+learner_profile.json
+setup_state.json
+daily_rotation.json
+learn_photos/
+cover_thumb_cache/
+# Python / OS
+__pycache__/
+*.pyc
+.DS_Store
+__MACOSX/
+.venv/

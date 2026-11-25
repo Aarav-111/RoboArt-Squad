@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1a0614"/><stop offset="1" stop-color="#2a0b2e"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fde68a"/><stop offset="1" stop-color="#d97706"/></linearGradient>
+  </defs>
+  <rect width="1200" height="300" rx="28" fill="url(#g)"/>
+  <g font-weight="800" text-anchor="middle">
+    <g transform="translate(200 0)">
+      <circle cy="110" r="62" fill="url(#gold)"/><text y="132" font-size="60" fill="#1a0614">4th</text>
+      <text y="215" font-size="26" fill="#fff">National Rank</text>
+      <text y="248" font-size="18" font-weight="500" fill="#e9d5ff">WRO India Nationals 2026</text>
+    </g>
+    <g transform="translate(600 0)">
+      <circle cy="110" r="62" fill="url(#gold)"/>
+      <path d="M-24 78 h48 v22 a24 24 0 0 1 -48 0 z M-10 124 h20 v16 h14 v10 h-48 v-10 h14 z" fill="#1a0614"/>
+      <text y="215" font-size="26" fill="#fff">Technical Excellence</text>
+      <text y="248" font-size="18" font-weight="500" fill="#e9d5ff">Special award, Nationals 2026</text>
+    </g>
+    <g transform="translate(1000 0)">
+      <circle cy="110" r="62" fill="none" stroke="url(#gold)" stroke-width="8"/><text y="132" font-size="60" fill="#fcd34d">2nd</text>
+      <text y="215" font-size="26" fill="#fff">Virtual Round</text>
+      <text y="248" font-size="18" font-weight="500" fill="#e9d5ff">WRO Virtual round, 3 Jul 2026</text>
+    </g>
+  </g>
+</svg>
