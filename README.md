@@ -3,200 +3,578 @@
 </p>
 
 <p align="center">
-  <a href="#awards"><img src="assets/badges/rank.svg" alt="WRO Nationals 2026: 4th in India"></a>
-  <a href="#awards"><img src="assets/badges/technical.svg" alt="Special award: Technical Excellence"></a>
-  <a href="#awards"><img src="assets/badges/virtual.svg" alt="Virtual round: 2nd place"></a>
-  <a href="#awards"><img src="assets/badges/gold.svg" alt="Badge: Gold"></a>
-  <a href="Software"><img src="https://img.shields.io/badge/Python-3-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3"></a>
-  <a href="Software/grbl_settings.py"><img src="https://img.shields.io/badge/Controller-GRBL-00979D?style=flat-square&logo=arduino&logoColor=white" alt="Controller: GRBL"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-6366f1?style=flat-square" alt="License: MIT"></a>
+  <img src="assets/badges/rank.svg" alt="4th place WRO India Nationals 2026" height="28">
+  <img src="assets/badges/technical.svg" alt="Technical Excellence Award" height="28">
+  <img src="assets/badges/virtual.svg" alt="2nd prize virtual rounds" height="28">
+  <img src="assets/badges/gold.svg" alt="Gold badge" height="28">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT">
+  <img src="https://img.shields.io/badge/python-3.13-3776AB" alt="Python 3.13">
+  <img src="https://img.shields.io/badge/GRBL-1.1-orange" alt="GRBL">
 </p>
+
+<h1 align="center">RoboArt-Squad</h1>
+<h3 align="center">Team 1435, WRO India Nationals 2026<br>Bharat Art-Bot: an autonomous robot that draws rangoli and kolam</h3>
 
 <p align="center">
-  <a href="#awards"><b>Awards</b></a> &nbsp;|&nbsp; <a href="#the-problem"><b>Problem</b></a> &nbsp;|&nbsp; <a href="#robot-journey"><b>Robot Journey</b></a> &nbsp;|&nbsp; <a href="#how-it-works"><b>How It Works</b></a> &nbsp;|&nbsp; <a href="#navigate-this-repository"><b>Navigate</b></a> &nbsp;|&nbsp; <a href="#run-it"><b>Run It</b></a> &nbsp;|&nbsp; <a href="#hardware"><b>Hardware</b></a> &nbsp;|&nbsp; <a href="#team-and-contact"><b>Team</b></a>
+  <a href="#1-overview">Overview</a> |
+  <a href="#2-awards-and-recognition">Awards</a> |
+  <a href="#9-hardware">Hardware</a> |
+  <a href="#10-cad-files">CAD</a> |
+  <a href="#11-software">Software</a> |
+  <a href="#16-run-it-yourself">Run it</a> |
+  <a href="#21-faq">FAQ</a>
 </p>
 
 ---
 
-## Overview
+## Table of Contents
 
-> ### Every Indian doorstep once had a rangoli.
-> Grandmothers drew kolam at dawn and taught it to the next generation, line by line.
->
-> **Today many grandmothers can no longer bend to the floor, and families live too far apart to keep teaching.**
->
-> Bharat Art-Bot is an autonomous CNC robot that draws traditional rangoli and kolam in real coloured powder, and an app that helps families learn, share and co-create designs together.
-
-Invited to the **WRO Open Championship, Asia Pacific (APAC)**.
-
-Built by **Team 1435, RoboArt Squad** for the **World Robot Olympiad (WRO) 2026, Future Innovators, Junior** category. Part of Prolabs Robotics, Bengaluru, India.
+1. [Overview](#1-overview)
+2. [Awards and Recognition](#2-awards-and-recognition)
+3. [Our Journey](#3-our-journey)
+4. [The Problem](#4-the-problem)
+5. [Research](#5-research)
+6. [The Solution](#6-the-solution)
+7. [Robot Versions](#7-robot-versions)
+8. [System Architecture](#8-system-architecture)
+9. [Hardware](#9-hardware)
+10. [CAD Files](#10-cad-files)
+11. [Software](#11-software)
+12. [Design Library](#12-design-library)
+13. [Drawing Pipeline](#13-drawing-pipeline)
+14. [Calibration and GRBL](#14-calibration-and-grbl)
+15. [Repository Navigation](#15-repository-navigation)
+16. [Run It Yourself](#16-run-it-yourself)
+17. [Configuration Reference](#17-configuration-reference)
+18. [Testing Checklist](#18-testing-checklist)
+19. [Troubleshooting](#19-troubleshooting)
+20. [Impact and Roadmap](#20-impact-and-roadmap)
+21. [FAQ](#21-faq)
+22. [Contributing](#22-contributing)
+23. [Safety](#23-safety)
+24. [Team and Credits](#24-team-and-credits)
 
 ---
 
-## Awards
+## 1. Overview
+
+**Bharat Art-Bot** is a Cartesian gantry robot that draws rangoli and kolam patterns on the floor using coloured powder. It was built by **Team 1435 (RoboArt Squad)** for the **World Robot Olympiad (WRO) India Nationals 2026**.
+
+Rangoli and kolam are living art forms. They are drawn fresh at the doorstep, often every morning. Fewer young people learn them each year, and the people who know the complex patterns are ageing. Our robot does two jobs:
+
+- It **draws** designs fast and cleanly in powder, in multiple colours.
+- It **teaches** designs through a companion app with a design library, family accounts and competitions.
+
+| Item | Detail |
+|---|---|
+| Team | 1435, RoboArt Squad |
+| Event | WRO India Nationals 2026 |
+| Result | 4th place and Technical Excellence Award |
+| Virtual rounds | 2nd prize (3 July 2026) |
+| Next | Invited to WRO Open Championship APAC |
+| Motion | Cartesian gantry, GT2 belts, 2020 V-slot |
+| Controller | Arduino Uno, CNC Shield V3, A4988 drivers, GRBL |
+| Colours | Red, Green, Yellow powder docks |
+| Software | Python 3.13, CustomTkinter, SQLite, TensorFlow |
+
+---
+
+## 2. Awards and Recognition
 
 <p align="center">
-  <img src="assets/awards.svg" alt="4th in India, Technical Excellence award, 2nd in the virtual round" width="90%">
+  <img src="assets/awards.svg" alt="Awards" width="90%">
 </p>
 
-| Result | Event | Date |
-| --- | --- | --- |
-| **4th in India** | WRO India National Championship 2026, Future Innovators Junior | 28 Aug 2026 |
-| **Technical Excellence award** | Special award, WRO India Nationals 2026 | 28 Aug 2026 |
-| **Gold Badge** | WRO India National Championship 2026 | Aug 2026 |
-| **2nd place** | WRO Virtual round | 3 Jul 2026 |
-| **Invited** | WRO Open Championship, Asia Pacific (APAC), Hyderabad | Sep 2026 |
+| Award | Event | Date |
+|---|---|---|
+| Technical Excellence Award | WRO India Nationals 2026 | 2026 |
+| 4th place overall | WRO India Nationals 2026 | 2026 |
+| 2nd prize, virtual rounds | WRO 2026 virtual rounds | 3 July 2026 |
+| Gold badge | WRO India Nationals 2026 | 2026 |
+| Invitation | WRO Open Championship APAC | 2026 |
 
-<table align="center">
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/photos/gold-badge-certificate.jpg" alt="WRO India Nationals 2026 Gold Badge certificate" width="100%">
-      <br><b>Gold Badge certificate</b><br>WRO India Nationals 2026
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/photos/nationals-progression-rank4.jpg" alt="Future Innovators progression list showing RoboArt Squad at rank 4" width="100%">
-      <br><b>Rank 4, Future Innovators</b><br>Official progression list, WRO India
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img src="assets/photos/gold-badge-certificate.jpg" alt="Gold badge certificate" width="48%">
+  <img src="assets/photos/nationals-progression-rank4.jpg" alt="Nationals progression, rank 4" width="48%">
+</p>
+
+The signed certificate is in [`Docs/certificates`](Docs/certificates/WRO-India-Nationals-2026-Gold-Badge-Aarav-Jaisingh.pdf).
 
 ---
 
-## The Problem
+## 3. Our Journey
 
-Rangoli and kolam are passed down by hand, from grandmother to child. That chain is breaking:
+| Stage | What happened |
+|---|---|
+| Idea | Notice that fewer children learn kolam and rangoli at home |
+| Prototype | First robot with a simple frame and a hand-fed powder nozzle |
+| Lead screw build | Version 2 moved the axes on lead screws |
+| Belt drive build | Version 3 switched to GT2 belts for speed |
+| Software | Family app, design library, GRBL tuning tools |
+| Virtual rounds | 2nd prize, 3 July 2026 |
+| Nationals | 4th place and Technical Excellence Award |
+| Next | WRO Open Championship APAC |
 
-| Barrier | What happens |
-| --- | --- |
-| Physical | Elderly women often cannot sit or bend on the floor to draw for long |
-| Distance | Urban nuclear families live far from grandparents |
-| Time | Busy schedules leave no daily practice time |
-| Interest | Children see it as hard and slow, so they stop |
-
-We ran a survey of 20 grandmothers and interviews with families to shape the solution.
-
----
-
-## Robot Journey
-
-<table align="center">
-  <tr>
-    <td align="center" width="33%">
-      <img src="assets/photos/robot-v1-prototype.jpg" alt="Version 1 wooden prototype with pen" width="100%">
-      <br><b>Version 1</b><br>Wooden frame, pen plotter
-    </td>
-    <td align="center" width="33%">
-      <img src="assets/photos/robot-v2-leadscrew.jpg" alt="Version 2 aluminium frame with lead screws" width="100%">
-      <br><b>Version 2</b><br>2020 V-slot frame, lead screws
-    </td>
-    <td align="center" width="33%">
-      <img src="assets/photos/robot-v3-belt-drive.jpg" alt="Version 3 belt drive with colour powder docks and camera" width="100%">
-      <br><b>Version 3 (Nationals)</b><br>GT2 belt drive, 3 colour docks, camera
-    </td>
-  </tr>
-</table>
+```mermaid
+timeline
+    title RoboArt Squad timeline
+    Idea : Cultural problem found
+    Prototype : V1 frame and nozzle
+    V2 : Lead screw axes
+    V3 : GT2 belt drive
+    July 2026 : 2nd prize virtual rounds
+    Nationals 2026 : 4th place and Technical Excellence
+    Next : WRO Open Championship APAC
+```
 
 ---
 
-## How It Works
+## 4. The Problem
+
+1. **Skill loss.** Complex kolam grids and rangoli symmetry are hard to learn without a patient teacher.
+2. **Time.** A detailed design takes an adult 30 to 60 minutes by hand.
+3. **Consistency.** Hand drawn lines vary in width and spacing.
+4. **Access.** Families that live far apart cannot easily share designs or compete.
+
+We asked: can a robot do the repetitive drawing so people can focus on creating and learning designs?
+
+---
+
+## 5. Research
+
+We studied three things before building.
+
+### 5.1 The art
+
+- Kolam: continuous line patterns wrapped around a dot grid.
+- Rangoli: filled colour patterns, often radially symmetric.
+- Both use symmetry, repetition and closed loops, which suits a plotter.
+
+### 5.2 Existing machines
+
+| Approach | Strength | Weakness |
+|---|---|---|
+| Hand drawing | Cultural value | Slow, varies |
+| Stencil and powder | Quick | One design per stencil |
+| Pen plotter | Precise | Cannot dispense powder |
+| Our gantry | Any design, multi colour | Needs calibration |
+
+### 5.3 Dispensing
+
+Powder flows unevenly. We tested nozzle sizes, belt speeds and vibration. The result is a belt based dispensing system that gives a steady line at working speed.
+
+---
+
+## 6. The Solution
+
+Three parts work together:
+
+1. **Robot.** A gantry that moves a dispensing head over a 600 x 1000 mm area.
+2. **Colour docks.** Three powder docks (Red, Green, Yellow). The head swaps colour between strokes.
+3. **App.** A desktop app to pick designs, preview, send to the robot, track progress, and share with family.
+
+<p align="center">
+  <img src="assets/design-library.jpg" alt="Design library" width="85%">
+</p>
+
+---
+
+## 7. Robot Versions
+
+| Version | Drive | Result |
+|---|---|---|
+| V1 prototype | Simple frame | Proved the idea, slow and wobbly |
+| V2 | Lead screws | Accurate, too slow |
+| V3 | GT2 belts, 2020 V-slot | Fast and accurate, used at Nationals |
+
+<p align="center">
+  <img src="assets/photos/robot-v1-prototype.jpg" alt="V1" width="31%">
+  <img src="assets/photos/robot-v2-leadscrew.jpg" alt="V2" width="31%">
+  <img src="assets/photos/robot-v3-belt-drive.jpg" alt="V3" width="31%">
+</p>
+<p align="center"><sub>V1 prototype, V2 lead screw, V3 belt drive</sub></p>
+
+---
+
+## 8. System Architecture
 
 ```mermaid
 flowchart LR
-    A[Pick a design<br>traditional or your own] --> B[Vector paths<br>DXF / G-code]
-    B --> C[GRBL controller<br>Arduino + CNC Shield]
-    C --> D[Powder head draws<br>Red, Green, Yellow]
-    E[Camera + hand tracking] --> F[Learn Mode<br>score and feedback]
-    G[Family accounts] --> H[Share and co-create]
+    A[Family App<br>CustomTkinter] --> B[Design Library<br>JSON and images]
+    A --> C[Core<br>SQLite, PBKDF2]
+    A --> D[Client<br>folder sync, competitions]
+    A --> E[GRBL Settings]
+    E --> F[Arduino Uno<br>CNC Shield V3]
+    F --> G[A4988 drivers]
+    G --> H[X and Y steppers]
+    F --> I[Dispensing head]
+    J[Overhead camera] --> K[Quality model<br>MobileNetV3 Small]
+    K --> A
 ```
 
-| Feature | What it does |
-| --- | --- |
-| Draw | Draws rangoli and kolam with real coloured powder from 3 docks |
-| Traditional library | 48 reference designs from 16 regional styles across India |
-| Learn Mode | Step-by-step lessons on symmetry, scored with camera feedback |
-| Family | Local accounts, families, invites and shared designs |
-| Kid mode | Simple, friendly interface with sounds |
-| Languages | UI translations, including Gujarati and other Indian languages |
+### Layers
+
+| Layer | Role |
+|---|---|
+| UI | `family_ui.py`, screens and navigation |
+| Core | `family_core.py`, accounts, password hashing, storage |
+| Client | `family_client.py`, sync and competitions |
+| Machine | `grbl_settings.py`, motion parameters |
+| Vision | `Tensorflow_eval-training.py`, scores drawings |
 
 ---
 
-## Navigate This Repository
+## 9. Hardware
 
-| Folder | What you will find |
-| --- | --- |
-| [Software](Software) | Family system, GRBL tools and the ML training script |
-| [Software/config](Software/config) | App settings: camera, colour docks, infill, language, kid mode |
-| [Software/models](Software/models) | `hand_landmarker.task` for hand tracking in Learn Mode |
-| [Designs/traditional_designs](Designs/traditional_designs) | 48 regional reference designs (Kolam, Alpana, Muggu, Pookalam and more) |
-| [Designs/My Designs](Designs/My%20Designs) | Sample saved notebook pages |
-| [Docs/certificates](Docs/certificates) | Nationals 2026 Gold Badge certificate |
-| [assets](assets) | Banners, badges and photos |
+### 9.1 Bill of main parts
 
-### File index
+| Part | Use |
+|---|---|
+| 2020 V-slot extrusion | Frame and gantry rails |
+| GT2 belt and pulleys | X and Y motion |
+| NEMA 17 steppers | Axis drive |
+| Arduino Uno | Runs GRBL |
+| CNC Shield V3 | Stepper driver base |
+| A4988 drivers | Stepper control |
+| Limit switches | Homing |
+| Powder docks x3 | Red, Green, Yellow |
+| Overhead camera | Quality scoring |
+| 3D printed parts | Brackets, mounts, gripper, hub |
+
+### 9.2 Wiring summary
+
+| Signal | Board |
+|---|---|
+| X step and dir | CNC Shield X |
+| Y step and dir | CNC Shield Y |
+| Z or dock lift | CNC Shield Z |
+| Limit switches | Shield limit pins |
+| Power | 12 V supply to shield |
+
+### 9.3 Assembly order
+
+1. Build the frame from 2020 extrusion.
+2. Mount the Y rails and the Y axis holders.
+3. Fit the X gantry using the XY inter-axis connector.
+4. Install pulleys with the pulley mounts and run GT2 belts.
+5. Mount motors and limit switches.
+6. Fit the Z axis mounter and dispensing head.
+7. Install the powder docks.
+8. Wire the shield, flash GRBL, set parameters.
+9. Home, calibrate, test.
+
+---
+
+## 10. CAD Files
+
+All parts are in [`Hardware/CAD`](Hardware/CAD) as STL, ready to slice and print. Parts follow the structure of the Humanoid Operating System hardware set from [Aarav-111/Humanoid-Operating-System](https://github.com/Aarav-111/Humanoid-Operating-System).
+
+<p align="center">
+  <img src="assets/cad-gallery.jpg" alt="CAD gallery" width="95%">
+</p>
+
+| File | Size mm (X x Y x Z) | Triangles | Use |
+|---|---|---|---|
+| `basic-robot.stl` | 600 x 1000 x 380 | 4310 | Full robot reference model |
+| `hub.stl` | 180 x 126 x 71 | 8948 | Central hub |
+| `gripper-part-1.stl` | 72 x 98 x 97 | 1640 | Gripper body |
+| `gripper-part-2-sponge.stl` | 27 x 10 x 85 | 292 | Soft gripper pad |
+| `z-axis-mounter.stl` | 50 x 107 x 117.5 | 380 | Z axis mount |
+| `xy-interaxis-connector.stl` | 50 x 50 x 145 | 212 | Joins X and Y |
+| `pulley-mount.stl` | 30 x 30 x 40 | 792 | Belt pulley seat |
+| `y-axis-holder.stl` | 25 x 40 x 76 | 404 | Y rail holder |
+| `l-bracket.stl` | 51 x 40 x 54 | 464 | Frame bracket |
+| `legs.stl` | 62 x 62 x 100 | 180 | Frame feet |
+| `apriltag-connector.stl` | 30 x 62 x 65 | 28 | Marker mount |
+
+Previews are in [`assets/cad`](assets/cad). A reference gantry document is at [`Hardware/Gantry-Reference-HOS-Documentation-v3.0.pdf`](Hardware/Gantry-Reference-HOS-Documentation-v3.0.pdf).
+
+### Print settings (suggested)
+
+| Setting | Value |
+|---|---|
+| Material | PLA or PETG |
+| Layer height | 0.2 mm |
+| Walls | 3 |
+| Infill | 25 to 40 percent for brackets |
+| Supports | Only where needed |
+
+---
+
+## 11. Software
+
+All code is in [`Software`](Software).
 
 | File | Purpose |
-| --- | --- |
-| `Software/family_core.py` | SQLite storage for users, families, invites and shares. Passwords hashed with PBKDF2-SHA256 |
-| `Software/family_client.py` | Sign-in, sync and sharing logic on top of `family_core` |
-| `Software/family_ui.py` | Tkinter / CustomTkinter popups for the Family sign-in and hub |
-| `Software/grbl_settings.py` | Reads and fixes GRBL steps/mm, axis ratio, max rate and arc tolerance over serial |
-| `Software/Tensorflow_eval-training.py` | Trains the design scoring model used in Learn Mode |
+|---|---|
+| `family_core.py` | SQLite storage, accounts, PBKDF2 password hashing |
+| `family_client.py` | Mailbox folder sync every 45 s, competitions |
+| `family_ui.py` | CustomTkinter interface |
+| `grbl_settings.py` | Steps per mm, axis ratio, rate cap, arc tolerance |
+| `Tensorflow_eval-training.py` | Trains the drawing quality model |
+| `config/*.json` | Nine configuration files |
+| `models/hand_landmarker.task` | Hand tracking model |
 
-> The main app file (`App_v16.py`) was not in the source archive. It will be added in a later commit.
+### 11.1 Family accounts
+
+Each family has an account. Passwords are hashed with PBKDF2. Data stays in a local SQLite database that is ignored by git.
+
+### 11.2 Mailbox sync
+
+Families share designs and competition entries through a shared folder. The client checks it every 45 seconds. No cloud account is needed.
+
+### 11.3 Competitions
+
+Members submit a design, the model scores it, and the app shows a leaderboard.
+
+### 11.4 Quality model
+
+A MobileNetV3 Small network with three heads:
+
+| Head | Measures |
+|---|---|
+| Symmetry | How balanced the pattern is |
+| Line quality | Evenness and continuity of lines |
+| Colour harmony | How well the colours work together |
 
 ---
 
-## Run It
+## 12. Design Library
 
-You need Git and Python 3.
+[`Designs/traditional_designs`](Designs/traditional_designs) holds **48 images across 16 traditional styles**. [`Designs/My Designs`](Designs/My%20Designs) holds three custom JSON designs.
+
+Designs are converted to stroke paths, grouped by colour, and ordered to reduce travel.
+
+---
+
+## 13. Drawing Pipeline
+
+```mermaid
+flowchart TD
+    A[Pick design] --> B[Trace to paths]
+    B --> C[Group by colour]
+    C --> D[Order strokes]
+    D --> E[Scale to canvas]
+    E --> F[Generate G-code]
+    F --> G[Send to GRBL]
+    G --> H[Draw and swap colour]
+    H --> I[Camera scores result]
+```
+
+| Step | Detail |
+|---|---|
+| Trace | Convert image to centre lines |
+| Colour group | Red, Green, Yellow |
+| Order | Nearest neighbour to cut travel |
+| Scale | Fit the 600 x 1000 mm canvas |
+| G-code | Lines and arcs within arc tolerance |
+| Send | Streaming with feed rate cap |
+| Score | Symmetry, line quality, colour harmony |
+
+---
+
+## 14. Calibration and GRBL
+
+Set these in GRBL with `$` commands (see `grbl_settings.py`).
+
+| Setting | Meaning |
+|---|---|
+| Steps per mm X and Y | From pulley teeth, belt pitch, microstepping |
+| Axis ratio | Corrects X versus Y scale differences |
+| Rate cap | Maximum feed so powder stays steady |
+| Arc tolerance | Smoothness of curves |
+
+### Steps per mm formula
+
+```
+steps_per_mm = (motor_steps_per_rev x microstepping) / (belt_pitch_mm x pulley_teeth)
+```
+
+Example: 200 steps, 16x microstepping, GT2 2 mm pitch, 20 teeth gives 80 steps per mm.
+
+### Calibration routine
+
+1. Home the machine.
+2. Draw a 200 mm square.
+3. Measure both sides.
+4. Adjust steps per mm until the square is exact.
+5. Draw a circle and check it is round, then tune the axis ratio.
+6. Lower the rate cap until line width is steady.
+
+---
+
+## 15. Repository Navigation
+
+```
+RoboArt-Squad/
+  README.md
+  LICENSE
+  .gitignore
+  assets/            hero, badges, photos, CAD previews
+  Designs/
+    traditional_designs/   48 images, 16 styles
+    My Designs/            3 JSON designs
+  Docs/certificates/       Gold badge certificate
+  Hardware/
+    CAD/                   11 STL files
+    Gantry-Reference-HOS-Documentation-v3.0.pdf
+  Software/
+    family_core.py
+    family_client.py
+    family_ui.py
+    grbl_settings.py
+    Tensorflow_eval-training.py
+    config/                9 JSON files
+    models/                hand_landmarker.task
+```
+
+---
+
+## 16. Run It Yourself
+
+### Requirements
+
+| Need | Version |
+|---|---|
+| Python | 3.13 |
+| OS | Windows, macOS or Linux |
+| Robot | Optional, the app runs without it |
+
+### Install
 
 ```bash
 git clone https://github.com/Aarav-111/RoboArt-Squad.git
-cd RoboArt-Squad
-python3 -m venv .venv
+cd RoboArt-Squad/Software
+python -m venv .venv
+# Windows: .venv\Scripts\activate
 source .venv/bin/activate
-pip install customtkinter pyserial numpy pandas tensorflow
+pip install customtkinter pillow numpy pyserial tensorflow mediapipe
 ```
 
-Check or tune the GRBL controller (close the app first, the serial port is exclusive):
+### Start
 
 ```bash
-python3 Software/grbl_settings.py                       # read $$ and report
-python3 Software/grbl_settings.py --axis-ratio 20:24 --apply
+python family_ui.py
 ```
 
-The AI features need your own OpenAI key. Set it as an environment variable or in a local `openai_key.txt`. **Never commit it.** It is already in `.gitignore`.
+### Connect the robot
+
+1. Flash GRBL to the Arduino Uno.
+2. Plug in USB and pick the serial port in the app.
+3. Home the machine, then run a test design.
 
 ---
 
-## Hardware
+## 17. Configuration Reference
 
-| Part | Detail |
-| --- | --- |
-| Frame | 3-axis Cartesian gantry on 2020 V-slot extrusion |
-| Drive | GT2 belts and 20T pulleys on X and Y |
-| Controller | Arduino Uno + CNC Shield V3 running GRBL |
-| Drivers | A4988 stepper drivers |
-| Motors | NEMA 17 steppers |
-| Tool | Powder dispensing head with Red, Green and Yellow docks |
-| Vision | Overhead USB camera |
+Configuration lives in `Software/config`. Files with secrets or personal data are git ignored.
+
+| Item | Where |
+|---|---|
+| Machine settings | `grbl_settings.py` |
+| App settings | `config/*.json` |
+| API key | `openai_key.txt` (never committed) |
+| Local data | `*.db` (never committed) |
 
 ---
 
-## Team and Contact
+## 18. Testing Checklist
 
-| Role | Name |
-| --- | --- |
-| Team Lead | Aarav Jaisingh |
-| Team Member | Riya Swamy |
-| Team Member | Job San Jose |
-| Coach | Amit Jaisingh |
+| Check | Pass condition |
+|---|---|
+| Homing | All axes reach limit and stop |
+| Square test | 200 mm square within 1 mm |
+| Circle test | Round, no flat sides |
+| Colour swap | Each dock dispenses cleanly |
+| Line quality | No gaps or blobs |
+| App sync | Shared folder updates within 45 s |
+| Login | Wrong password rejected |
 
-For collaboration or questions: prolabsrobotics@gmail.com
+---
 
-| Link | Where |
-| --- | --- |
-| Prolabs website | https://sites.google.com/view/prolabsrobotics |
-| YouTube | [@prolabsrobotics](https://www.youtube.com/@prolabsrobotics) |
-| Sister project | [Humanoid Operating System (HOS)](https://github.com/Aarav-111/Humanoid-Operating-System) |
-| License | [MIT](LICENSE) |
+## 19. Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Axis drifts | Loose belt or pulley | Tighten, re-seat grub screw |
+| Wrong scale | Steps per mm off | Recalibrate |
+| Oval circles | Axis ratio off | Tune axis ratio |
+| Gaps in lines | Damp or clumped powder | Sieve and dry powder |
+| Blobs at corners | Speed too high | Lower rate cap |
+| No serial port | Driver or cable | Reinstall CH340 driver, change cable |
+| Motors buzz | Low driver current | Adjust A4988 reference voltage |
+
+---
+
+## 20. Impact and Roadmap
+
+### Impact
+
+- Keeps rangoli and kolam visible to a new generation.
+- Saves time for busy families.
+- Gives a safe way to practise complex designs.
+
+### Roadmap
+
+| Item | Status |
+|---|---|
+| WRO Open Championship APAC | Invited |
+| Faster dispensing | Planned |
+| More colours | Planned |
+| `App_v16.py` full app | Coming |
+| Mobile viewer | Idea |
+
+---
+
+## 21. FAQ
+
+**Does it need the internet?** No. Sync uses a shared folder.
+
+**How long does a design take?** Depends on the pattern. Simple designs take a few minutes.
+
+**Which colours?** Red, Green and Yellow docks.
+
+**Can I add my own design?** Yes, add a JSON file in `Designs/My Designs`.
+
+**Can I print the parts?** Yes, see section 10.
+
+**Why Arduino and GRBL?** Cheap, reliable, well documented.
+
+---
+
+## 22. Contributing
+
+1. Fork the repo.
+2. Create a branch.
+3. Make a small, focused change.
+4. Open a pull request with a clear description.
+
+Ideas welcome: new designs, calibration tools, dispensing improvements.
+
+---
+
+## 23. Safety
+
+- Keep hands clear while the gantry moves.
+- Keep an emergency stop within reach.
+- Use non-toxic powder and avoid inhaling dust.
+- Keep power wiring covered and dry.
+- Supervise children near the robot.
+
+---
+
+## 24. Team and Credits
+
+| Name | Role |
+|---|---|
+| Aarav Jaisingh | Lead engineer, software and robotics |
+| Team 1435 | RoboArt Squad |
+| Prolabs Robotics | Organisation |
+
+Hardware structure inspired by [Humanoid Operating System](https://github.com/Aarav-111/Humanoid-Operating-System).
+
+**Contact:** prolabsrobotics@gmail.com
+
+Licensed under MIT. See [LICENSE](LICENSE).
+
+<p align="center"><sub>Built by Team 1435 for WRO India Nationals 2026. Invited to WRO Open Championship APAC.</sub></p>
